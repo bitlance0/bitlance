@@ -1,0 +1,529 @@
+/* src/app/globals.css */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ========================================================================
+   🎨 PALETA BINANCE PRO (unificada)
+   ======================================================================== */
+
+:root {
+  /* Colores base */
+  --amarillo-principal: #F0B90B;
+  --amarillo-claro: #FFD666;
+  --amarillo-oscuro: #C79400;
+  --negro: #181A20;
+  --gris-oscuro: #2B3139;
+  --blanco: #FFFFFF;
+
+  /* Base Binance Pro */
+  --color-primary: #F0B90B;
+  --color-primary-light: #FFD666;
+  --color-primary-dark: #C79400;
+
+  --color-bg: #FFFFFF;
+  --color-surface: #F5F5F7;
+  --color-surface-alt: #E8E8EA;
+  --color-text: #181A20;
+  --color-text-muted: #555;
+  --color-border: #D8D8D8;
+
+  /* Estados */
+  --color-success: #00C58E;
+  --color-danger: #E74C3C;
+  --color-warning: #F39C12;
+
+  /* Extras */
+  --radius: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+
+  /* Botones y transiciones */
+  --button-bg: var(--amarillo-principal);
+  --button-text: var(--negro);
+  --emoji-button: #838180;
+
+  /* Radix UI Colors - ACTUALIZADOS para tema amarillo-negro */
+  --popover: var(--color-bg);
+  --popover-foreground: var(--color-text);
+  --accent: rgba(240, 185, 11, 0.12);
+  --accent-foreground: var(--color-primary);
+  --muted-foreground: var(--color-text-muted);
+  --destructive: var(--color-danger);
+  --ring: var(--color-primary);
+
+  /* Sidebar Colors - NUEVAS VARIABLES */
+  --sidebar-bg: var(--color-surface);
+  --sidebar-foreground: var(--color-text);
+  --sidebar-accent: rgba(240, 185, 11, 0.15);
+  --sidebar-accent-foreground: var(--color-primary);
+  --sidebar-border: var(--color-border);
+  --sidebar-ring: var(--color-primary);
+
+  /* variables específicas para tabla */
+  --color-table-row-muted: #b9b9b9;
+  --table-row-bg: var(--color-surface);
+  --table-row-hover: var(--color-surface-alt);
+}
+
+/* Tema oscuro - BINANCE STYLE */
+.dark {
+  --color-bg: #181A20;
+  --color-surface: #2B3139;
+  --color-surface-alt: #32383F;
+  --color-text: #FFFFFF;
+  --color-text-muted: #A9A9A9;
+  --color-border: rgba(255, 255, 255, 0.08);
+
+  --color-primary: #F0B90B;
+  --color-primary-light: #FFD666;
+  --color-primary-dark: #C79400;
+
+  /* Radix UI Colors para dark mode */
+  --popover: #2B3139;
+  --popover-foreground: #FFFFFF;
+  --accent: rgba(240, 185, 11, 0.15);
+  --accent-foreground: #F0B90B;
+  --muted-foreground: #A9A9A9;
+  --ring: #F0B90B;
+
+  /* Sidebar Colors - DARK MODE */
+  --sidebar-bg: #2B3139;
+  --sidebar-foreground: #FFFFFF;
+  --sidebar-accent: rgba(240, 185, 11, 0.2);
+  --sidebar-accent-foreground: #F0B90B;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+
+  --table-row-bg: var(--color-surface);
+  --table-row-hover: var(--color-surface-alt);
+}
+
+/* Tema claro */
+[data-theme="light"] {
+  --color-bg: #FFFFFF;
+  --color-text: #181A20;
+  --popover: #FFFFFF;
+  --popover-foreground: #181A20;
+  --sidebar-bg: #F5F5F7;
+  --sidebar-foreground: #181A20;
+
+  --table-row-bg: var(--color-table-row-muted);
+  --table-row-hover: var(--color-surface);
+}
+
+/* ========================================================================
+   🔹 BASE
+   ======================================================================== */
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+    outline-color: color-mix(in srgb, var(--color-primary) 50%, transparent);
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+/* ========================================================================
+   🔹 COMPONENTES SIDEBAR (NUEVA SECCIÓN)
+   ======================================================================== */
+
+@layer components {
+  /* Sidebar Container */
+  [data-slot="sidebar-content"] {
+    background-color: var(--sidebar-bg) !important;
+    color: var(--sidebar-foreground) !important;
+  }
+
+  /* Sidebar Group */
+  [data-slot="sidebar-group"] {
+    border-bottom: 1px solid var(--sidebar-border) !important;
+  }
+
+  /* Sidebar Menu Items */
+  [data-slot="sidebar-menu-item"] {
+    margin: 0.125rem 0 !important;
+  }
+
+  /* Sidebar Menu Button - ESTILOS PRINCIPALES */
+  [data-slot="sidebar-menu-button"] {
+    background-color: transparent !important;
+    color: var(--sidebar-foreground) !important;
+    border-radius: var(--radius) !important;
+    transition: all 0.2s ease !important;
+    border: none !important;
+  }
+
+  [data-slot="sidebar-menu-button"]:hover {
+    background-color: var(--sidebar-accent) !important;
+    color: var(--sidebar-accent-foreground) !important;
+    transform: translateX(4px) !important;
+  }
+
+  [data-slot="sidebar-menu-button"]:focus {
+    background-color: var(--sidebar-accent) !important;
+    color: var(--sidebar-accent-foreground) !important;
+    box-shadow: 0 0 0 2px var(--sidebar-ring) !important;
+  }
+
+  /* Estado activo del menu item */
+  [data-slot="sidebar-menu-button"][data-active="true"] {
+    background-color: var(--sidebar-accent) !important;
+    color: var(--sidebar-accent-foreground) !important;
+    font-weight: 600 !important;
+  }
+
+  /* Iconos dentro del sidebar */
+  [data-slot="sidebar-menu-button"] svg {
+    color: currentColor !important;
+    transition: color 0.2s ease !important;
+  }
+
+  /* Grupo desplegable (Administrar) */
+  [data-slot="sidebar-group-content"] details summary {
+    background-color: transparent !important;
+    color: var(--sidebar-foreground) !important;
+    border-radius: var(--radius) !important;
+    transition: all 0.2s ease !important;
+    cursor: pointer !important;
+  }
+
+  [data-slot="sidebar-group-content"] details summary:hover {
+    background-color: var(--sidebar-accent) !important;
+    color: var(--sidebar-accent-foreground) !important;
+  }
+
+  [data-slot="sidebar-group-content"] details[open] summary {
+    color: var(--sidebar-accent-foreground) !important;
+    background-color: var(--sidebar-accent) !important;
+  }
+
+  /* Items dentro del grupo desplegable */
+  [data-slot="sidebar-group-content"] details [data-slot="sidebar-menu-button"] {
+    margin-left: 0.5rem !important;
+    border-left: 2px solid var(--sidebar-border) !important;
+    border-radius: 0 var(--radius) var(--radius) 0 !important;
+  }
+
+  [data-slot="sidebar-group-content"] details [data-slot="sidebar-menu-button"]:hover {
+    border-left-color: var(--sidebar-accent-foreground) !important;
+  }
+
+  /* Texto dentro del sidebar */
+  [data-slot="sidebar-menu-button"] span {
+    color: currentColor !important;
+  }
+}
+
+/* ========================================================================
+   🔹 COMPONENTES RADIX UI
+   ======================================================================== */
+
+@layer components {
+  /* Select (combobox) - ESTILOS BINANCE */
+  [data-slot="select-trigger"] {
+    background-color: var(--color-bg) !important;
+    border: 1px solid var(--color-border) !important;
+    color: var(--color-text) !important;
+    border-radius: var(--radius) !important;
+    transition: all 0.2s ease !important;
+  }
+
+  [data-slot="select-trigger"]:hover {
+    border-color: var(--color-primary) !important;
+    background-color: var(--color-surface) !important;
+  }
+
+  [data-slot="select-trigger"]:focus-visible {
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 30%, transparent) !important;
+  }
+
+  /* Dropdown Menu - ESTILOS BINANCE */
+  [data-slot="dropdown-menu-content"] {
+    background-color: var(--popover) !important;
+    color: var(--popover-foreground) !important;
+    border: 1px solid var(--color-border) !important;
+    border-radius: var(--radius) !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3) !important;
+    min-width: 180px !important;
+    padding: 0.5rem !important;
+  }
+
+  /* Items del dropdown con hover AMARILLO */
+  [data-slot="dropdown-menu-item"] {
+    color: var(--popover-foreground) !important;
+    border-radius: calc(var(--radius) - 2px) !important;
+    padding: 0.5rem 0.75rem !important;
+    margin: 0.125rem 0 !important;
+    cursor: pointer !important;
+    transition: all 0.2s ease !important;
+    font-size: 0.875rem !important;
+    outline: none !important;
+  }
+
+  [data-slot="dropdown-menu-item"]:not([data-disabled]):hover {
+    background-color: var(--accent) !important;
+    color: var(--accent-foreground) !important;
+    transform: translateX(2px) !important;
+  }
+
+  [data-slot="dropdown-menu-item"]:not([data-disabled]):focus {
+    background-color: var(--accent) !important;
+    color: var(--accent-foreground) !important;
+  }
+
+  /* Item destructivo (Salir) */
+  [data-slot="dropdown-menu-item"][data-variant="destructive"] {
+    color: var(--color-danger) !important;
+  }
+
+  [data-slot="dropdown-menu-item"][data-variant="destructive"]:not([data-disabled]):hover {
+    background-color: color-mix(in srgb, var(--color-danger) 15%, transparent) !important;
+    color: var(--color-danger) !important;
+  }
+
+  /* Select Content (opciones del combobox) */
+  [data-slot="select-content"] {
+    background-color: var(--popover) !important;
+    color: var(--popover-foreground) !important;
+    border: 1px solid var(--color-border) !important;
+    border-radius: var(--radius) !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3) !important;
+  }
+
+  /* Items del select */
+  [data-slot="select-item"] {
+    color: var(--popover-foreground) !important;
+    border-radius: calc(var(--radius) - 4px) !important;
+    padding: 0.5rem 0.75rem !important;
+    margin: 0.125rem 0.25rem !important;
+    cursor: pointer !important;
+    transition: all 0.2s ease !important;
+    font-size: 0.875rem !important;
+    outline: none !important;
+  }
+
+  [data-slot="select-item"]:not([data-disabled]):hover {
+    background-color: var(--accent) !important;
+    color: var(--accent-foreground) !important;
+  }
+
+  [data-slot="select-item"][data-highlighted] {
+    background-color: var(--accent) !important;
+    color: var(--accent-foreground) !important;
+  }
+
+  /* Popover general */
+  [data-radix-popper-content-wrapper] {
+    z-index: 50 !important;
+  }
+
+  [data-radix-popper-content-wrapper] > div {
+    background-color: var(--popover) !important;
+    color: var(--popover-foreground) !important;
+    border: 1px solid var(--color-border) !important;
+    border-radius: var(--radius) !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3) !important;
+  }
+
+  /* Trigger del dropdown menu (nombre de usuario) */
+  [data-slot="dropdown-menu-trigger"] {
+    color: var(--color-text) !important;
+    transition: all 0.2s ease !important;
+    cursor: pointer !important;
+  }
+
+  [data-slot="dropdown-menu-trigger"]:hover {
+    color: var(--color-primary) !important;
+  }
+}
+
+/* ========================================================================
+   🔹 COMPONENTES REUTILIZABLES
+   ======================================================================== */
+
+@layer components {
+  /* Botones */
+  .btn-primary {
+    background-color: var(--color-primary);
+    color: var(--negro);
+    padding: 0.75rem 2rem;
+    border-radius: var(--radius-xl);
+    font-weight: 600;
+    transition: all 0.3s ease;
+  }
+
+  .btn-primary:hover {
+    background-color: var(--color-primary-light);
+    color: var(--color-bg);
+    transform: translateY(-2px);
+  }
+
+  .btn-outline {
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    transition: all 0.3s ease;
+  }
+
+  .btn-outline:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+
+  /* Botón emoji */
+  .btn-emoji {
+    border-radius: var(--radius-xl);
+    padding: 0.5rem 1rem;
+    font-size: 1rem;
+    background-color: var(--emoji-button);
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  .btn-emoji:hover {
+    background-color: var(--amarillo-principal);
+    color: var(--negro);
+  }
+
+  /* Textos */
+  .text-muted {
+    color: var(--color-text-muted);
+  }
+
+  /* Cards */
+  .card {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    transition: all 0.25s ease;
+  }
+
+  .dark .card {
+    background-color: var(--color-surface);
+  }
+}
+
+/* ========================================================================
+   🔹 SIDEBAR Y ESTADOS
+   ======================================================================== */
+
+.sidebar {
+  background-color: var(--color-surface);
+}
+
+.sidebar-menu-button {
+  color: var(--color-text-muted);
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.sidebar-menu-button:hover {
+  color: var(--color-primary);
+  background-color: rgba(240, 185, 11, 0.08);
+}
+
+.sidebar-menu-button[data-active="true"] {
+  color: var(--color-primary);
+  background-color: rgba(240, 185, 11, 0.12);
+}
+
+/* Estados */
+[data-status="success"] {
+  color: var(--color-success);
+}
+[data-status="danger"] {
+  color: var(--color-danger);
+}
+[data-status="warning"] {
+  color: var(--color-warning);
+}
+
+/* ========================================================================
+   🔹 EXTENSIÓN LANDING PAGE
+   ======================================================================== */
+
+/* Hero Section */
+.hero-section {
+  position: relative;
+  height: 90vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.hero-section video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hero-section::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Animaciones suaves */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.8s ease-out forwards;
+}
+
+/* Tarjetas de Landing */
+.card-landing {
+  background-color: var(--card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card-landing:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+/* Imágenes redondeadas */
+.img-rounded-xl {
+  border-radius: var(--radius-xl);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Testimonios */
+.testimonial-quote {
+  font-style: italic;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+
+/* Responsividad */
+@media (max-width: 768px) {
+  .hero-section h1 {
+    font-size: 2rem !important;
+  }
+
+  .hero-section p {
+    font-size: 1rem !important;
+  }
+
+  .btn-primary {
+    padding: 0.6rem 1.5rem;
+    font-size: 0.95rem;
+  }
+}
