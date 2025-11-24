@@ -133,17 +133,17 @@ export async function seedRBAC() {
 
   await upsertRoleMatrix("super", {
     [P.trading_operate.id]:          "mandatory",
-    [P.trading_high_limit.id]:       "optional",
-    [P.market_crypto.id]:            "optional",
+    [P.trading_high_limit.id]:       "mandatory",
+    [P.market_crypto.id]:            "mandatory",
 
-    [P.analysis_advanced_charts.id]: "optional",
-    [P.reports_detailed.id]:         "optional",
+    [P.analysis_advanced_charts.id]: "mandatory",
+    [P.reports_detailed.id]:         "mandatory",
 
-    [P.support_user_assist.id]:      "optional",
-    [P.support_view_tickets.id]:     "optional",
+    [P.support_user_assist.id]:      "mandatory",
+    [P.support_view_tickets.id]:     "mandatory",
 
-    [P.admin_user_mgmt.id]:          "optional",
-    [P.admin_balance_mgmt.id]:       "optional",
+    [P.admin_user_mgmt.id]:          "mandatory",
+    [P.admin_balance_mgmt.id]:       "mandatory",
 
     [P.admin2_assign_perms.id]:      "mandatory",
     [P.admin2_system_config.id]:     "mandatory",

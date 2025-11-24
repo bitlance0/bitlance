@@ -462,6 +462,13 @@ export async function GET(request: Request) {
           Host: "www.miAPI.com",
         },
       });
+
+      if (!res.ok) {
+        throw new Error(
+          `Error fetching landing data: ${res.status} ${res.statusText}`
+        );
+      }
+
       const data = await res.json();
       return NextResponse.json(data.data, { status: 200 });
     } catch (err) {
