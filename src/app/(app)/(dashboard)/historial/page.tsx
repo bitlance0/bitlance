@@ -1,3 +1,4 @@
+// src/app/(app)/(dashboard)/historial/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -13,99 +14,100 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 
+type Operacion = {
+  id: string;
+  simbolo: string;
+  tipo: string;
+  estado: string;
+  cantidad: number;
+  precio: number;
+  total: number;
+  cuenta: string;
+  fecha: string;
+  profitLoss?: number;
+};
+
+type Movimiento = {
+  id: string;
+  tipo: string;
+  monto: number;
+  fecha: string;
+  operaciones: Operacion[];
+};
+
 export default function TransaccionesFinancierasTab() {
-  const [movimientos, setMovimientos] = useState<any[]>([]);
+  const [movimientos, setMovimientos] = useState<Movimiento[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activo, setActivo] = useState<number | null>(null);
+  const [activo, setActivo] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setTimeout(() => {
-      setMovimientos([
-        {
-          id: 1,
-          tipo: "Depósito",
-          monto: 500,
-          fecha: "2025-10-10",
-          operaciones: [
-            {
-              id: "op1",
-              simbolo: "BTC/USD",
-              tipo: "compra",
-              estado: "completada",
-              cantidad: 0.01,
-              precio: 48000,
-              total: 480,
-              cuenta: "Cuenta Principal",
-              fecha: "2025-10-10T10:20:00",
-              profitLoss: 12,
-            },
-            {
-              id: "op2",
-              simbolo: "ETH/USD",
-              tipo: "venta",
-              estado: "completada",
-              cantidad: 0.5,
-              precio: 3400,
-              total: 1700,
-              cuenta: "Cuenta Principal",
-              fecha: "2025-10-10T12:45:00",
-              profitLoss: -25,
-            },
-          ],
-        },
-        {
-          id: 2,
-          tipo: "Retiro",
-          monto: 200,
-          fecha: "2025-10-15",
-          operaciones: [
-            {
-              id: "op3",
-              simbolo: "USDT",
-              tipo: "retiro",
-              estado: "pendiente",
-              cantidad: 200,
-              precio: 1,
-              total: 200,
-              cuenta: "Wallet Externa",
-              fecha: "2025-10-15T15:30:00",
-            },
-          ],
-        },
-        {
-          id: 3,
-          tipo: "Cargo",
-          monto: -25,
-          fecha: "2025-10-20",
-          operaciones: [
-            {
-              id: "op4",
-              simbolo: "Fee Mensual",
-              tipo: "cargo",
-              estado: "procesado",
-              cantidad: 1,
-              precio: 25,
-              total: 25,
-              cuenta: "Cuenta Principal",
-              fecha: "2025-10-20T08:00:00",
-            },
-          ],
-        },
-      ]);
-      setLoading(false);
-    }, 900);
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const res = await fetch("/api/user/historial", {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || "Error al cargar historial");
+        }
+
+        if (!cancelled) {
+          setMovimientos(data.movimientos ?? []);
+        }
+      } catch (err: any) {
+        console.error(err);
+        if (!cancelled) {
+          setError(err.message || "Error cargando historial");
+          setMovimientos([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const toggleMovimiento = (id: number) => {
+  const toggleMovimiento = (id: string) => {
     setActivo((prev) => (prev === id ? null : id));
   };
 
-  if (loading)
+  if (loading) {
     return (
       <div className="flex justify-center items-center py-16">
         <Loader2 className="animate-spin h-6 w-6 text-[var(--color-primary)]" />
       </div>
     );
+  }
+
+  if (error) {
+    return (
+      <div className="py-8 text-center text-sm text-red-400">
+        {error}
+      </div>
+    );
+  }
+
+  if (!movimientos.length) {
+    return (
+      <div className="py-8 text-center text-sm text-[var(--color-text-muted)]">
+        Aún no tienes movimientos registrados en tu historial.
+      </div>
+    );
+  }
 
   const getTipoClasses = (tipo: string) =>
     tipo === "compra"
@@ -149,13 +151,20 @@ export default function TransaccionesFinancierasTab() {
                 )}
                 <div>
                   <p className="font-semibold">{m.tipo}</p>
-                  <span className="text-xs text-[var(--color-text-muted)]">{m.fecha}</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    {m.fecha}
+                  </span>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                <span className={`font-bold ${m.monto >= 0 ? "text-green-400" : "text-red-400"}`}>
-                  {m.monto >= 0 ? "+" : "-"}${Math.abs(m.monto)}
+                <span
+                  className={`font-bold ${
+                    m.monto >= 0 ? "text-green-400" : "text-red-400"
+                  }`}
+                >
+                  {m.monto >= 0 ? "+" : "-"}$
+                  {Math.abs(m.monto).toLocaleString()}
                 </span>
                 {abierto ? (
                   <ChevronUp className="h-4 w-4 text-[var(--color-text-muted)]" />
@@ -181,7 +190,7 @@ export default function TransaccionesFinancierasTab() {
                       Detalles del movimiento
                     </h4>
                     <div className="space-y-4">
-                      {m.operaciones.map((operacion: any) => (
+                      {m.operaciones.map((operacion) => (
                         <div
                           key={operacion.id}
                           className="border rounded-xl p-4 bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface)] transition-colors"
@@ -189,7 +198,9 @@ export default function TransaccionesFinancierasTab() {
                           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                             <div className="flex-1">
                               <div className="flex items-center gap-3 mb-2">
-                                <h4 className="font-bold text-lg">{operacion.simbolo}</h4>
+                                <h4 className="font-bold text-lg">
+                                  {operacion.simbolo}
+                                </h4>
                                 <div className="flex gap-2">
                                   {operacion.tipo && (
                                     <Badge className={getTipoClasses(operacion.tipo)}>
@@ -206,31 +217,57 @@ export default function TransaccionesFinancierasTab() {
 
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                                 <div>
-                                  <span className="text-[var(--color-text-muted)]">Cantidad:</span>
-                                  <span className="font-medium ml-2">{operacion.cantidad}</span>
+                                  <span className="text-[var(--color-text-muted)]">
+                                    Cantidad:
+                                  </span>
+                                  <span className="font-medium ml-2">
+                                    {operacion.cantidad}
+                                  </span>
                                 </div>
                                 <div>
-                                  <span className="text-[var(--color-text-muted)]">Precio:</span>
-                                  <span className="font-medium ml-2">${operacion.precio.toLocaleString()}</span>
+                                  <span className="text-[var(--color-text-muted)]">
+                                    Precio:
+                                  </span>
+                                  <span className="font-medium ml-2">
+                                    $
+                                    {operacion.precio
+                                      ? operacion.precio.toLocaleString()
+                                      : "0"}
+                                  </span>
                                 </div>
                                 <div>
-                                  <span className="text-[var(--color-text-muted)]">Total:</span>
-                                  <span className="font-medium ml-2">${operacion.total.toLocaleString()}</span>
+                                  <span className="text-[var(--color-text-muted)]">
+                                    Total:
+                                  </span>
+                                  <span className="font-medium ml-2">
+                                    $
+                                    {operacion.total
+                                      ? operacion.total.toLocaleString()
+                                      : "0"}
+                                  </span>
                                 </div>
                                 <div>
-                                  <span className="text-[var(--color-text-muted)]">Cuenta:</span>
-                                  <span className="font-medium ml-2">{operacion.cuenta}</span>
+                                  <span className="text-[var(--color-text-muted)]">
+                                    Cuenta:
+                                  </span>
+                                  <span className="font-medium ml-2">
+                                    {operacion.cuenta}
+                                  </span>
                                 </div>
                               </div>
 
                               <div className="flex justify-between items-center mt-3">
                                 <span className="text-sm text-[var(--color-text-muted)]">
-                                  {new Date(operacion.fecha).toLocaleString("es-ES")}
+                                  {new Date(
+                                    operacion.fecha
+                                  ).toLocaleString("es-ES")}
                                 </span>
                                 {operacion.profitLoss !== undefined && (
                                   <div
                                     className={`flex items-center gap-1 ${
-                                      operacion.profitLoss >= 0 ? "text-green-400" : "text-red-400"
+                                      operacion.profitLoss >= 0
+                                        ? "text-green-400"
+                                        : "text-red-400"
                                     }`}
                                   >
                                     {operacion.profitLoss >= 0 ? (
@@ -239,7 +276,8 @@ export default function TransaccionesFinancierasTab() {
                                       <TrendingDown className="w-4 h-4" />
                                     )}
                                     <span className="font-medium">
-                                      ${operacion.profitLoss >= 0 ? "+" : ""}
+                                      $
+                                      {operacion.profitLoss >= 0 ? "+" : ""}
                                       {operacion.profitLoss.toLocaleString()}
                                     </span>
                                   </div>
@@ -260,4 +298,3 @@ export default function TransaccionesFinancierasTab() {
     </div>
   );
 }
-  

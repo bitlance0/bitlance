@@ -21,12 +21,26 @@ type Market = (typeof MARKETS)[number] | "indices" | "all";
 export default function TradingDashboard() {
   const [isMobile, setIsMobile] = useState(false);
 
+  // 📱 + 🔍 Detección combinada (ancho + zoom)
+  useEffect(() => {
+    const checkViewport = () => {
+      const isZoomed = window.devicePixelRatio >= 1.5; // ~150% o más
+      const isSmallWidth = window.innerWidth <= 850;   // móvil / tablet
+
+      setIsMobile(isZoomed || isSmallWidth);
+    };
+
+    checkViewport();
+    window.addEventListener("resize", checkViewport);
+
+    return () => window.removeEventListener("resize", checkViewport);
+  }, []);
+
   const {
     selectedSymbol,
     setSelectedSymbol,
     selectedMarket,
     setDataMarket,
-    // 👇 usamos también el stream de mercados del store
     startMarketStream,
     stopMarketStream,
   } = useMarketStore();
@@ -96,7 +110,6 @@ export default function TradingDashboard() {
     };
   }, [selectedMarket, loadData]);
 
-
   /** 🔴 SSE: arranca el stream 2s después de cambiar de mercado */
   useEffect(() => {
     const marketToStream: Market =
@@ -106,7 +119,6 @@ export default function TradingDashboard() {
 
     if (!marketToStream) return;
 
-    // esperamos 2s antes de iniciar el stream
     const timeoutId = setTimeout(() => {
       startMarketStream(marketToStream);
     }, 2000);
@@ -116,15 +128,6 @@ export default function TradingDashboard() {
       stopMarketStream();
     };
   }, [selectedMarket, startMarketStream, stopMarketStream]);
-
-
-  /** 📱 Detección de mobile */
-  useEffect(() => {
-    const checkViewport = () => setIsMobile(window.innerWidth <= 850);
-    checkViewport();
-    window.addEventListener("resize", checkViewport);
-    return () => window.removeEventListener("resize", checkViewport);
-  }, []);
 
   return (
     <div className="w-full h-full">

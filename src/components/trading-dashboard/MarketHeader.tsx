@@ -1,3 +1,4 @@
+// src/components/trading-dashboard/MarketHeader.tsx
 "use client";
 
 import { useMarketStore } from "@/stores/useMarketStore";
@@ -13,17 +14,18 @@ export default function MarketHeader() {
       </span>
 
       {/* Columna 2 → BUY */}
-      <span className="text-center w-[60px]">
+      <span className="text-center w-[60px] text-[var(--color-primary)]">
         Comprar
       </span>
 
-      {/* Columna 3 → espacio del cambio */}
+
+      {/* Columna 3 → espacio del cambio (columna central de la row) */}
       <span className="text-center w-[60px] opacity-0">
         ▲ --
       </span>
 
       {/* Columna 4 → SELL */}
-      <span className="text-center w-[60px]">
+      <span className="text-center w-[60px] text-[var(--color-primary)]">
         Vender
       </span>
     </div>

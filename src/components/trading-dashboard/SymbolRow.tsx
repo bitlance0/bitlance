@@ -151,7 +151,7 @@ export default function SymbolRow({
   }, [targetChange, isMarketOpen]);
 
   return (
-    <div className="mx-1 my-2 mt-3 transition-all duration-200">
+    <div className="px-1 pt-2">
       <div
         onClick={() => setSelectedSymbol(symbol)}
         className="
@@ -162,6 +162,7 @@ export default function SymbolRow({
           transition-colors cursor-pointer
         "
       >
+        {/* Columna 1: símbolo */}
         <div className="flex items-center gap-2 leading-tight p-1">
           <span
             className={`
@@ -175,7 +176,7 @@ export default function SymbolRow({
           </span>
         </div>
 
-        {/* SELL Button */}
+        {/* Columna 2: SELL (Comprar para el usuario) */}
         <div
           className="rounded-md transition-colors duration-300"
           style={{
@@ -190,11 +191,11 @@ export default function SymbolRow({
             colorText={sellColor}
             sellPrice={sellPrice}
             buyPrice={buyPrice}
-            isMarketOpen={isMarketOpen} // ⬅️ AQUÍ
+            isMarketOpen={isMarketOpen}
           />
         </div>
 
-        {/* CHANGE central */}
+        {/* Columna 3: cambio */}
         <div
           className="min-w-[35px] text-center text-[13px] font-semibold transition-colors duration-300"
           style={{ color: changeColor }}
@@ -202,7 +203,7 @@ export default function SymbolRow({
           {isNegative ? "▼" : "▲"} {changeValue.toFixed(2)}
         </div>
 
-        {/* BUY Button */}
+        {/* Columna 4: BUY (Vender para el usuario) */}
         <div
           className="rounded-md transition-colors duration-300"
           style={{
@@ -217,7 +218,7 @@ export default function SymbolRow({
             colorText={buyColor}
             sellPrice={sellPrice}
             buyPrice={buyPrice}
-            isMarketOpen={isMarketOpen} // ⬅️ Y AQUÍ
+            isMarketOpen={isMarketOpen}
           />
         </div>
       </div>

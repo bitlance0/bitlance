@@ -4,7 +4,7 @@
 import { useRouter, usePathname } from "next/navigation";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-const tabs = ["General", "Permisos"]; // "Roles", 
+const tabs = ["General", "Cuentas", "Permisos"]; // "Roles", 
 
 export default function UsuariosTabs({ activeTab }: { activeTab: string }) {
   const router = useRouter();

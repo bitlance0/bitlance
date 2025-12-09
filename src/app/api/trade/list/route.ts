@@ -1,3 +1,4 @@
+// src/app/api/trade/list/route.ts
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { trades } from "@/db/schema";

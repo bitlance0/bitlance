@@ -50,6 +50,16 @@ export const user = pgTable("user", {
     .notNull(),
 });
 
+
+export const accountAuditLogs = pgTable("account_audit_logs", {
+  id: text("id").primaryKey(),              // usa uuid v4 en código
+  accountId: text("account_id").notNull(),  // FK lógica a trading_accounts.id
+  adminId: text("admin_id").notNull(),      // quien hizo el cambio
+  action: text("action").notNull(),         // ej: "STATE_CHANGE", "BALANCE_ADJUSTMENT"
+  metadata: jsonb("metadata").$type<Record<string, any>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const roles = pgTable("roles", {
   id: roleIdEnum("id").primaryKey(),               // 'user' | 'collaborator' | 'admin' | 'super'
   name: text("name").notNull(),                    // legible
@@ -85,9 +95,6 @@ export const userRoles = pgTable(
     }),
   })
 );
-
-
-
 
 export const rolePermissions = pgTable("role_permissions", {
   roleId: roleIdEnum("role_id").references(() => roles.id).notNull(),

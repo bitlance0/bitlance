@@ -31,8 +31,11 @@ export default function HeaderPublic() {
   ];
 
   return (
-    <header className="fixed top-0 left-0 w-full z-50 border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="mx-auto px-6 py-4 flex items-center justify-between w-full">
+    // <header className="fixed top-0 left-0 w-full z-50 border-b border-border bg-background/80 backdrop-blur-md">
+    <header
+      className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md"
+    >
+      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
         {/* 🟡 Logo */}
         <div className="flex items-center gap-2">
           <Link href="/landing" className="flex items-center gap-2 font-bold text-xl">
@@ -147,7 +150,8 @@ export default function HeaderPublic() {
 
       {/* 🔻 Menú móvil desplegable */}
       {isOpen === "mobile" && (
-        <div className="md:hidden bg-background border-t border-border px-6 py-4 space-y-4">
+        // <div className="md:hidden bg-background border-t border-border px-6 py-4 space-y-4">
+          <div className="md:hidden bg-background border-t border-border px-6 py-4 space-y-4">
           {navItems.map((item) => (
             <Link
               key={item.href}

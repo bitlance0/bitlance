@@ -4,14 +4,15 @@ import Stripe from "stripe";
 import { db } from "@/db";
 import { payments, tradingAccounts, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-10-29.clover", // la que te pedían los types
-});
+const getWebhookStripe = () => getStripe();
 
 export async function POST(req: Request) {
+  const stripe = getWebhookStripe();
   const body = await req.text();
   const headerList = await headers();
   const sig = headerList.get("stripe-signature") ?? "";

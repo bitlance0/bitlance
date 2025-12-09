@@ -1,3 +1,4 @@
+// src/components/trading-dashboard/TradingDialog.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -424,6 +425,14 @@ export function TradingDialog({
     return true;
   }
 
+  // funcion para notificar al panel de operaciones y renderizar cambios
+  function notifyTradesUpdated() {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("trades:updated"));
+    }
+  }
+
+
   async function handleConfirmTrade() {
     if (!user?.id) return toast.error("No autenticado");
     if (!isMarketOpen)
@@ -458,6 +467,8 @@ export function TradingDialog({
       if (typeof data?.trade?.balanceAfter === "number") {
         updateUserBalance(Number(data.trade.balanceAfter));
       }
+      // 👇 avisar al panel de operaciones, para actualizar la vista en frontend
+      notifyTradesUpdated();
       setIsOpen(false);
     } catch (err) {
       console.error("❌ Error al abrir operación:", err);
@@ -498,6 +509,8 @@ export function TradingDialog({
           data?.error || "No se pudo crear la operación pendiente"
         );
       toast.success("Orden pendiente creada");
+      // 👇 avisar al panel de operaciones, para actualizar la vista en frontend
+      notifyTradesUpdated();
       setIsOpen(false);
     } catch (err) {
       console.error("❌ Error creando pendiente:", err);

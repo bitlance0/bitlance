@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import UsuariosTabs from "../components/usuarios-tabs";
 import GeneralTab from "../components/tabs/general-tab";
 // import { RolesTab } from "../components/tabs/roles-tab";
+import CuentasTab from "../components/tabs/cuentas-tab";
 import { PermisosTab } from "../components/tabs/permisos-tab";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
@@ -29,6 +30,8 @@ export default function UsuarioDetailView({ usuarioId, activeTab }: UsuarioDetai
     switch (activeTab) {
       case "General":
         return <GeneralTab usuarioId={usuarioId} />;
+      case "Cuentas":
+        return <CuentasTab usuarioId={usuarioId} />;
       // case "Roles":
       //   return <RolesTab usuarioId={usuarioId} />;
       case "Permisos":

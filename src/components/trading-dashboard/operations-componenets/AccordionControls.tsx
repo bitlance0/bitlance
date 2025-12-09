@@ -1,3 +1,4 @@
+// src/components/trading-dashboard/operations-componenets/AccordionControls.tsx
 export function AccordionControls({
   expanded,
   onToggleOpen,

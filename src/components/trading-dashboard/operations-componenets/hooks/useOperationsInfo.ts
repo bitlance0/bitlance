@@ -1,3 +1,4 @@
+// src/components/trading-dashboard/operations-componenets/hooks/useOperationsInfo.ts
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -7,6 +8,14 @@ import { Trade, TriggerRule } from "../utils/operationsTypes";
 import { sideSign, toNum } from "../utils/operationsHelpers";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/common/ConfirmDialog";
+
+// función para notificar al panel de operaciones y renderizar cambios
+function notifyTradesUpdatedGlobal() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("trades:updated"));
+  }
+}
+
 
 export function useOperationsInfo() {
   const CURRENCY = "USD";
@@ -144,6 +153,26 @@ export function useOperationsInfo() {
     fetchTradesAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  // 🔁 Re-fetch cuando alguien dispare el evento global "trades:updated"
+  useEffect(() => {
+    const handler = () => {
+      fetchTradesAll();
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("trades:updated", handler);
+    }
+
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("trades:updated", handler);
+      }
+    };
+    // mismo ciclo de vida que el fetch inicial: cambia solo si cambia el user
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
 
   /* -------------------------------- Métricas -------------------------------- */
   useEffect(() => {
@@ -306,6 +335,8 @@ export function useOperationsInfo() {
             }
 
             toast.success(`Orden pendiente activada: ${p.symbol} @ ${live.toFixed(4)}`);
+            // 👇 avisar globalmente que las operaciones cambiaron y renderizar cambios
+            notifyTradesUpdatedGlobal();
             fetchTradesAll();
           } catch (e: any) {
             if (Date.now() - lastToastRef.current > 2000) {
@@ -408,6 +439,8 @@ export function useOperationsInfo() {
           // ignore
         }
       }
+      // 👇 avisar globalmente que las operaciones cambiaron y renderizar cambios
+      notifyTradesUpdatedGlobal();
 
       // Reconciliar con servidor (segundo plano)
       fetchTradesAll();
@@ -435,6 +468,8 @@ export function useOperationsInfo() {
         );
       }
       toast.success(`Pendiente cancelada: ${trade.symbol}`);
+      // 👇 avisar globalmente que las operaciones cambiaron y renderizar cambios
+      notifyTradesUpdatedGlobal();
       fetchTradesAll();
     } catch (e: any) {
       console.error("cancel pending:", e);
