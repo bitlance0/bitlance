@@ -21,7 +21,7 @@ type Quote = {
 
 /* ========= Config ========= */
 const APP_BASE_URL =
-  process.env.APP_BASE_URL || "http://localhost:3000"; // ⚠️ pon aquí el dominio de Render
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"; // ⚠️ pon aquí el dominio de Render
 const MARKET_URL = `${APP_BASE_URL}/api/markets?market=all`;
 const ACTIVATE_URL = `${APP_BASE_URL}/api/trade/pending/activate`;
 const CLOSE_URL = `${APP_BASE_URL}/api/trade/close`;
