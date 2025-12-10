@@ -37,7 +37,7 @@ const items: NavItem[] = [
 
 const adminItems: NavItem[] = [
   { title: "Usuarios", url: "/admin/usuarios", icon: Users, requiredPerm: "admin_user_mgmt" },
-  { title: "Pagos", url: "/admin/pagos", icon: Wallet, requiredPerm: "payments_gateway" },
+  // { title: "Pagos", url: "/admin/pagos", icon: Wallet, requiredPerm: "payments_gateway" },
   // { title: "Usuarios", url: "/admin/usuarios", icon: Users, requiredRole: "admin" },
   { title: "Movimientos", url: "/admin/movimientos", icon: Activity, requiredPerm: "admin_balance_mgmt" },
   { title: "Dashboard", url: "/admin/dashboard", icon: BarChart3, requiredRole: "admin" },
