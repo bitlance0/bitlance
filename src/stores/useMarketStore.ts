@@ -3,6 +3,8 @@ import { MARKETS } from "@/lib/markets";
 import { MarketQuote } from "@/types/interfaces";
 import { create } from "zustand";
 
+/* ===================== Tipos ===================== */
+
 export interface MarketFilters {
   search: string;
   sortBy: "price" | "change" | "volume" | null;
@@ -41,16 +43,29 @@ interface MarketState {
   getLivePrice: (symbol: string) => number | undefined;
 }
 
-/** === SSE cliente (compartido) === */
+/* ===================== SSE globals ===================== */
+
 let esRef: EventSource | null = null;
 let reconnectTimer: any = null;
 let currentMarketForSSE: string | null = null;
+
+/* ===================== Stream throttling ===================== */
+
+// ⬇⬇⬇ VELOCIDAD REAL DEL STREAM (ajusta aquí) ⬇⬇⬇
+const APPLY_INTERVAL_MS = 4_000;
+
+// Buffer NO reactivo
+let priceBuffer: Prices = {};
+let applyTimer: any = null;
+
+/* ===================== SSE helpers ===================== */
 
 function openSSE(market: string, onPrices: (p: Prices) => void) {
   if (esRef) {
     try { esRef.close(); } catch {}
     esRef = null;
   }
+
   currentMarketForSSE = market;
   const url = `/api/alpha-stream?market=${encodeURIComponent(market)}`;
   const es = new EventSource(url);
@@ -63,7 +78,7 @@ function openSSE(market: string, onPrices: (p: Prices) => void) {
         onPrices(data.prices as Prices);
       }
     } catch {
-      // ignorar
+      // ignore
     }
   };
 
@@ -72,7 +87,9 @@ function openSSE(market: string, onPrices: (p: Prices) => void) {
     esRef = null;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
-      if (currentMarketForSSE) openSSE(currentMarketForSSE, onPrices);
+      if (currentMarketForSSE) {
+        openSSE(currentMarketForSSE, onPrices);
+      }
     }, 1500);
   };
 }
@@ -81,19 +98,23 @@ function closeSSE() {
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
   currentMarketForSSE = null;
+
   if (esRef) {
     try { esRef.close(); } catch {}
     esRef = null;
   }
 }
 
-/** Fusiona precios live en el array de MarketQuote */
+/* ===================== Utils ===================== */
+
 function mergePrices(base: MarketQuote[], prices: Prices): MarketQuote[] {
   if (!base?.length || !prices) return base;
+
   return base.map((q) => {
     const qa: any = q;
     const sym = String(qa.symbol || qa.ticker || qa.code || "").toUpperCase();
     const p = prices[sym];
+
     if (typeof p === "number") {
       return {
         ...q,
@@ -105,7 +126,8 @@ function mergePrices(base: MarketQuote[], prices: Prices): MarketQuote[] {
   });
 }
 
-/** === Store === */
+/* ===================== Store ===================== */
+
 export const useMarketStore = create<MarketState>((set, get) => ({
   markets: [...MARKETS],
   dataMarket: [],
@@ -120,6 +142,8 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   fetchController: null,
   requestVersion: 0,
 
+  /* ---------- setters ---------- */
+
   setDataMarket: (dataMarket) => set({ dataMarket }),
   setSelectedMarket: (market) => set({ selectedMarket: market }),
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
@@ -130,7 +154,8 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     set((state) => ({ filters: { ...state.filters, search: term } })),
   setDataSymbolOperation: (data) => set({ dataSymbolOperation: data }),
 
-    /** Snapshot REST: /api/markets-symbols */
+  /* ---------- REST snapshot ---------- */
+
   fetchMarket: async (marketKey: string) => {
     const prev = get().fetchController;
     prev?.abort();
@@ -154,9 +179,6 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       const data: MarketQuote[] = await res.json();
       if (version !== get().requestVersion) return;
 
-      // ⬇⬇⬇  CAMBIO CLAVE AQUÍ  ⬇⬇⬇
-      // No mezclamos livePrices en este punto.
-      // El SSE se encargará de ir actualizando luego.
       set({
         dataMarket: data,
         isLoading: false,
@@ -173,35 +195,45 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     }
   },
 
+  /* ---------- SSE stream ---------- */
 
-  /** SSE de mercados: /api/alpha-stream */
   startMarketStream: (marketKey: string) => {
     const current = get().sseMarket;
     if (current === marketKey && esRef) return;
 
-    closeSSE();
+    get().stopMarketStream();
     set({ sseMarket: marketKey });
 
     openSSE(marketKey, (prices) => {
-      set({ livePrices: { ...get().livePrices, ...prices } });
-      const updated = mergePrices(get().dataMarket, prices);
-      set({ dataMarket: updated });
+      // 1️⃣ Acumular precios
+      priceBuffer = { ...priceBuffer, ...prices };
+
+      // 2️⃣ Aplicar a UI solo cada APPLY_INTERVAL_MS
+      if (!applyTimer) {
+        applyTimer = setTimeout(() => {
+          const buffered = priceBuffer;
+          priceBuffer = {};
+          applyTimer = null;
+
+          set({ livePrices: { ...get().livePrices, ...buffered } });
+
+          const updated = mergePrices(get().dataMarket, buffered);
+          set({ dataMarket: updated });
+        }, APPLY_INTERVAL_MS);
+      }
     });
 
     if (typeof document !== "undefined") {
       const onVis = () => {
         if (document.visibilityState === "visible") {
           if (!esRef && get().sseMarket) {
-            openSSE(get().sseMarket!, (prices) => {
-              set({ livePrices: { ...get().livePrices, ...prices } });
-              const updated = mergePrices(get().dataMarket, prices);
-              set({ dataMarket: updated });
-            });
+            openSSE(get().sseMarket!, () => {});
           }
         } else {
-          closeSSE();
+          get().stopMarketStream();
         }
       };
+
       const anyWin = window as any;
       if (!anyWin.__market_vis_listener__) {
         document.addEventListener("visibilitychange", onVis);
@@ -212,14 +244,18 @@ export const useMarketStore = create<MarketState>((set, get) => ({
 
   stopMarketStream: () => {
     closeSSE();
+    priceBuffer = {};
+    clearTimeout(applyTimer);
+    applyTimer = null;
     set({ sseMarket: null });
   },
+
+  /* ---------- helpers ---------- */
 
   selectMarket: async (marketKey: string) => {
     set({ selectedMarket: marketKey as Market });
     get().stopMarketStream();
     await get().fetchMarket(marketKey);
-    // El componente decide si llama a startMarketStream
   },
 
   applyLivePrices: () => {
@@ -231,11 +267,13 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     const S = symbol?.toUpperCase?.() || symbol;
     const live = get().livePrices[S];
     if (typeof live === "number") return live;
+
     const row = get().dataMarket.find((q) =>
       [q.symbol, (q as any).ticker, (q as any).code]
         .map((x) => String(x || "").toUpperCase())
         .includes(S)
     );
-    return typeof row?.price === "number" ? row!.price : undefined;
+
+    return typeof row?.price === "number" ? row.price : undefined;
   },
 }));
