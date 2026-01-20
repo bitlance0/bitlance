@@ -92,10 +92,10 @@ export default function UsuariosListView() {
             Administra todos los usuarios del sistema de trading
           </p>
         </div>
-        <Button className="btn-primary flex items-center gap-2 w-full sm:w-auto">
+        {/* <Button className="btn-primary flex items-center gap-2 w-full sm:w-auto">
           <UserPlus className="w-4 h-4" />
           Nuevo Usuario
-        </Button>
+        </Button> */}
       </div>
 
       {/* Filtros y Búsqueda */}

@@ -21,7 +21,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           {/* Navbar arriba */}
           <Navbar />
           <div className="fixed mt-2 top-[80px] right-6 z-50 opacity-70 hover:opacity-100 transition-all">
-            <ThemeSwitcher expandedWidth="w-40" />
+            {/* <ThemeSwitcher expandedWidth="w-40" /> */}
         </div>
           {/* Contenido dinámico */}
           <main className="flex-1 w-full p-6">

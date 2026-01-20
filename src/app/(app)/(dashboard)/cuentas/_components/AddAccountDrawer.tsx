@@ -154,12 +154,12 @@ export default function AddAccountDrawer({ onCreated, triggerClassName }: Props)
   /* ---------- Render ---------- */
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger asChild>
+      {/* <SheetTrigger asChild>
         <Button className={triggerClassName ?? "bg-yellow-400 text-black hover:bg-yellow-500"}>
           <Plus className="w-4 h-4 mr-2" />
           Nueva Cuenta
         </Button>
-      </SheetTrigger>
+      </SheetTrigger> */}
 
       <SheetContent className="sm:max-w-lg bg-[var(--color-surface-alt)] p-4">
         <SheetHeader>
