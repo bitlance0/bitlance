@@ -600,7 +600,7 @@ export default function AdminMovimientosPage() {
                               )}
                             </div>
 
-                            {/* LINK ADMIN */}
+                            {/* LINK-ADMIN */}
                             {accountId && userId && (
                               <div className="flex justify-end pt-2">
                                 <Button
