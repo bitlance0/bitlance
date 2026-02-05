@@ -27,9 +27,18 @@ type CacheWrapper = {
 
 /* ===================== Config ===================== */
 
-const API_KEY = process.env.ALPHA_VANTAGE_API_KEY;
+const API_KEY = process.env.ALPHA_VANTAGE_API_KEY!;
+
+// Alpha plan pago → configurable
+const ALPHA_RPM = Number(process.env.ALPHA_RPM ?? 500);
+const REQUEST_INTERVAL_MS = Math.ceil(60_000 / ALPHA_RPM);
+
+// cache
 const CACHE_TTL_SEC = 300;
 const CACHE_TTL_MS = CACHE_TTL_SEC * 1000;
+
+// ventana de datos reales
+const REAL_WINDOW_MS = 15_000;
 
 /* ===================== Redis / Memory ===================== */
 
@@ -48,36 +57,24 @@ if (
 const memoryCache = new Map<string, CacheWrapper>();
 const inflight = new Map<string, Promise<Quote[]>>();
 
-/* ===================== Cache helpers ===================== */
+/* ===================== Alpha Guard ===================== */
 
-async function getCache(key: string): Promise<CacheWrapper | null> {
-  if (redis) {
-    try {
-      const raw = await redis.get(key);
-      if (raw) return typeof raw === "string" ? JSON.parse(raw) as CacheWrapper : (raw as CacheWrapper);
-    } catch {}
-  }
-  const local = memoryCache.get(key);
-  if (!local) return null;
-  if (Date.now() - local.ts > CACHE_TTL_MS) {
-    memoryCache.delete(key);
-    return null;
-  }
-  return local;
+// backoff global (simple y efectivo en serverless)
+let alphaBlockedUntil = 0;
+
+function alphaAvailable() {
+  return Date.now() > alphaBlockedUntil;
 }
 
-async function setCache(key: string, data: Quote[]) {
-  const wrapper: CacheWrapper = { ts: Date.now(), data };
-  if (redis) {
-    try {
-      await redis.set(key, JSON.stringify(wrapper), { ex: CACHE_TTL_SEC });
-      return;
-    } catch {}
-  }
-  memoryCache.set(key, wrapper);
+/* ===================== Utils ===================== */
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-/* ===================== Alpha Vantage ===================== */
+function isFresh(wrapper: CacheWrapper) {
+  return Date.now() - wrapper.ts < REAL_WINDOW_MS;
+}
 
 async function safeJson(res: Response) {
   try {
@@ -87,35 +84,99 @@ async function safeJson(res: Response) {
   }
 }
 
-async function fetchCrypto(symbol: string): Promise<Quote | null> {
+/* ===================== Cache helpers ===================== */
+
+async function getCache(key: string): Promise<CacheWrapper | null> {
+  if (redis) {
+    try {
+      const raw = await redis.get(key);
+      if (raw) {
+        return typeof raw === "string"
+          ? (JSON.parse(raw) as CacheWrapper)
+          : (raw as CacheWrapper);
+      }
+    } catch {}
+  }
+
+  const local = memoryCache.get(key);
+  if (!local) return null;
+
+  if (Date.now() - local.ts > CACHE_TTL_MS) {
+    memoryCache.delete(key);
+    return null;
+  }
+
+  return local;
+}
+
+async function setCache(key: string, data: Quote[]) {
+  const wrapper: CacheWrapper = { ts: Date.now(), data };
+
+  if (redis) {
+    try {
+      await redis.set(key, JSON.stringify(wrapper), { ex: CACHE_TTL_SEC });
+      return;
+    } catch {}
+  }
+
+  memoryCache.set(key, wrapper);
+}
+
+/* ===================== Alpha Vantage ===================== */
+
+async function fetchCrypto(symbol: string): Promise<Quote> {
+  if (!alphaAvailable()) {
+    throw new Error("alpha_blocked");
+  }
+
   const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${symbol}&to_currency=USD&apikey=${API_KEY}`;
   const res = await fetch(url);
   const json = await safeJson(res);
 
-  if (!res.ok || !json || json.Note || json["Error Message"]) return null;
+  // Alpha NO siempre devuelve 429
+  if (
+    !res.ok ||
+    !json ||
+    json["Error Message"] ||
+    json.Note
+  ) {
+    if (json?.Note) {
+      alphaBlockedUntil = Date.now() + 60_000; // 1 min
+      throw new Error("rate_limited");
+    }
+    throw new Error("alpha_failed");
+  }
 
   const rate = json["Realtime Currency Exchange Rate"];
-  const price = parseFloat(rate["5. Exchange Rate"] ?? "0");
+  const price = parseFloat(rate["5. Exchange Rate"]);
+
+  if (!Number.isFinite(price)) {
+    throw new Error("invalid_price");
+  }
 
   return {
     symbol,
     price,
     latestTradingDay: rate["6. Last Refreshed"],
     source: "real",
+    market: "crypto",
   };
 }
 
 /* ===================== Mock ===================== */
 
 function vary(price: number, pct = 0.6) {
-  return Number((price * (1 + (Math.random() * 2 - 1) * pct / 100)).toFixed(6));
+  return Number(
+    (price * (1 + (Math.random() * 2 - 1) * pct / 100)).toFixed(6)
+  );
 }
 
 function getMock(market: string, symbols: string[]): Quote[] {
   return symbols.map((s) => {
-    const base = MOCK_BASE[market]?.find(b => b.symbol === s)?.price ?? 100;
+    const base = MOCK_BASE[market]?.find((b) => b.symbol === s)?.price ?? 100;
     const price = vary(base, 1.2);
     const prev = base;
+
     return {
       symbol: s,
       price,
@@ -124,6 +185,7 @@ function getMock(market: string, symbols: string[]): Quote[] {
       changePercent: ((price - prev) / prev) * 100,
       latestTradingDay: new Date().toISOString(),
       source: "mock",
+      market,
     };
   });
 }
@@ -139,33 +201,10 @@ function hash(str: string) {
   return h >>> 0;
 }
 
-// function simulate(wrapper: CacheWrapper): Quote[] {
-//   const bucket = Math.floor(Date.now() / 10_000);
-//   const elapsedMin = (Date.now() - wrapper.ts) / 60000;
-//   const maxPct = Math.min(elapsedMin * 0.25, 0.75) / 100;
-
-//   return wrapper.data.map((q) => {
-//     const seed = hash(q.symbol + bucket);
-//     const rand = ((seed % 1000) / 1000) * 2 - 1;
-//     const price = q.price * (1 + rand * maxPct);
-//     const prev = q.previousClose ?? q.price;
-
-//     return {
-//       ...q,
-//       price: Number(price.toFixed(6)),
-//       high: q.high ? Math.max(q.high, price) : price,
-//       low: q.low ? Math.min(q.low, price) : price,
-//       change: price - prev,
-//       changePercent: ((price - prev) / prev) * 100,
-//       source: "simulated",
-//     };
-//   });
-// }
-
 function maxAbsDelta(price: number) {
-  if (price >= 50000) return price * 0.0002; // BTC, índices grandes
-  if (price >= 10000) return price * 0.0004;
-  if (price >= 1000) return price * 0.0008;
+  if (price >= 50_000) return price * 0.0002;
+  if (price >= 10_000) return price * 0.0004;
+  if (price >= 1_000) return price * 0.0008;
   if (price >= 100) return price * 0.0015;
   return price * 0.003;
 }
@@ -179,63 +218,36 @@ const VOLATILITY_BY_MARKET: Record<string, number> = {
 
 function simulate(wrapper: CacheWrapper): Quote[] {
   const now = Date.now();
-
-  // bucket determinista cada 10s
-  const bucketIndex = Math.floor(now / 10_000);
-
-  // minutos desde el último snapshot real
-  const elapsedMinutes = (now - wrapper.ts) / 60_000;
-
-  // límite porcentual base (crece suavemente)
-  const maxPct =
-    Math.min(elapsedMinutes * 0.25, 0.75) / 100;
-
-  // suavizado temporal (evita nerviosismo inicial)
-  const smoothFactor = Math.min(elapsedMinutes / 2, 1);
+  const bucket = Math.floor(now / 10_000);
+  const elapsedMin = (now - wrapper.ts) / 60_000;
+  const maxPct = Math.min(elapsedMin * 0.25, 0.75) / 100;
+  const smooth = Math.min(elapsedMin / 2, 1);
 
   return wrapper.data.map((q) => {
-    const seed = hash(q.symbol + bucketIndex);
+    const seed = hash(q.symbol + bucket);
     const rand = ((seed % 1000) / 1000) * 2 - 1;
 
     const market = q.market ?? "crypto";
-    const marketVol = VOLATILITY_BY_MARKET[market] ?? 1;
+    const vol = VOLATILITY_BY_MARKET[market] ?? 1;
 
-    // delta porcentual teórico
-    const pctDelta = q.price * rand * maxPct * marketVol;
-
-    // límite absoluto dinámico
+    const pctDelta = q.price * rand * maxPct * vol;
     const absCap = maxAbsDelta(q.price);
+    const delta = Math.max(-absCap, Math.min(absCap, pctDelta)) * smooth;
 
-    // clamp final
-    const clampedDelta = Math.max(
-      -absCap,
-      Math.min(absCap, pctDelta)
-    );
-
-    // suavizado temporal
-    const finalDelta = clampedDelta * smoothFactor;
-
-    const newPrice = q.price + finalDelta;
+    const price = q.price + delta;
     const prev = q.previousClose ?? q.price;
 
     return {
       ...q,
-      price: Number(newPrice.toFixed(6)),
-      high:
-        typeof q.high === "number"
-          ? Math.max(q.high, newPrice)
-          : newPrice,
-      low:
-        typeof q.low === "number"
-          ? Math.min(q.low, newPrice)
-          : newPrice,
-      change: newPrice - prev,
-      changePercent: ((newPrice - prev) / prev) * 100,
+      price: Number(price.toFixed(6)),
+      high: q.high ? Math.max(q.high, price) : price,
+      low: q.low ? Math.min(q.low, price) : price,
+      change: price - prev,
+      changePercent: ((price - prev) / prev) * 100,
       source: "simulated",
     };
   });
 }
-
 
 /* ===================== Fetch Market ===================== */
 
@@ -245,9 +257,10 @@ async function fetchMarket(market: string): Promise<Quote[]> {
 
   for (const s of symbols) {
     const q = await fetchCrypto(s);
-    if (!q) throw new Error("fetch failed");
     results.push(q);
+    await sleep(REQUEST_INTERVAL_MS); // throttle garantizado
   }
+
   return results;
 }
 
@@ -255,23 +268,39 @@ async function fetchMarket(market: string): Promise<Quote[]> {
 
 export async function GET(req: Request) {
   if (!API_KEY) {
-    return NextResponse.json({ error: "Missing API key" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Missing API key" },
+      { status: 500 }
+    );
   }
 
-  const market = new URL(req.url).searchParams.get("market") ?? "crypto";
+  const market =
+    new URL(req.url).searchParams.get("market") ?? "crypto";
   const key = `market-${market}`;
 
   const cached = await getCache(key);
+
+  // 1️⃣ Cache
   if (cached) {
-    return NextResponse.json(simulate(cached), { status: 200 });
+    return NextResponse.json(
+      isFresh(cached) ? cached.data : simulate(cached),
+      { status: 200 }
+    );
   }
 
+  // 2️⃣ Inflight
   if (inflight.has(key)) {
     await inflight.get(key);
-    const cached = await getCache(key);
-    if (cached) return NextResponse.json(simulate(cached));
+    const again = await getCache(key);
+    if (again) {
+      return NextResponse.json(
+        isFresh(again) ? again.data : simulate(again),
+        { status: 200 }
+      );
+    }
   }
 
+  // 3️⃣ Fetch real
   const p = (async () => {
     const data = await fetchMarket(market);
     await setCache(key, data);
@@ -282,11 +311,12 @@ export async function GET(req: Request) {
 
   try {
     const data = await p;
-    return NextResponse.json(simulate({ ts: Date.now(), data }), { status: 200 });
+    return NextResponse.json(data, { status: 200 });
   } catch {
     const fallback = cached
       ? simulate(cached)
       : getMock(market, SYMBOLS_MAP[market] ?? []);
+
     await setCache(key, fallback);
     return NextResponse.json(fallback, { status: 200 });
   } finally {
