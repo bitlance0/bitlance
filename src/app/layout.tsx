@@ -38,6 +38,7 @@ const setInitialTheme = `(function() {
 
 import Script from "next/script";
 import { Toaster } from "sonner";
+import WhatsAppFloatingButton from "@/components/common/WhatsappButton";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -54,7 +55,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <Toaster position="top-right" richColors closeButton  />
         <AuthSync>
-          {children}
+          <>
+            <WhatsAppFloatingButton phoneNumber="34613974463"  />
+            {children}
+          </>
         </AuthSync>
       </body>
     </html>
