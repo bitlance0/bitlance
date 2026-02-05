@@ -6,6 +6,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import AppSidebar from "@/components/layout/AppSidebar";
 import { Navbar } from "@/components/layout/Navbar";
 import ThemeSwitcher from "@/components/ui/ThemeSwitcher";
+import WhatsAppFloatingButton from "@/components/common/WhatsappButton";
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   // const [mobileAsideOpen, setMobileAsideOpen] = useState(false);
@@ -24,7 +25,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             {/* <ThemeSwitcher expandedWidth="w-40" /> */}
         </div>
           {/* Contenido dinámico */}
-          <main className="flex-1 w-full p-6">
+          <main className="flex-1 w-full p-6 relative">
+            <WhatsAppFloatingButton phoneNumber="34613974463"  />
             {children}
           </main>
         </div>
