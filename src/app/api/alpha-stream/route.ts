@@ -6,6 +6,8 @@ export const revalidate = 0;
 import { NextRequest } from "next/server";
 import { Redis } from "@upstash/redis";
 
+/* ===================== Types ===================== */
+
 type Quote = {
   symbol: string;
   price: number;
@@ -16,20 +18,30 @@ type Quote = {
   changePercent?: number;
   latestTradingDay?: string;
   market?: string;
+  source?: "real" | "simulated" | "mock";
 };
 
-type CacheWrapper = { ts: number; data: Quote[] };
+type CacheWrapper = {
+  ts: number;
+  data: Quote[];
+  anchorTs?: number; // compat con /api/markets
+};
+
+/* ===================== Redis ===================== */
 
 const CACHE_KEY = (m: string) => `alpha:market:${m}`;
 
-const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL!;
-const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
 const redis =
-  UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN
-    ? new Redis({ url: UPSTASH_REDIS_REST_URL, token: UPSTASH_REDIS_REST_TOKEN })
+  process.env.UPSTASH_REDIS_REST_URL &&
+  process.env.UPSTASH_REDIS_REST_TOKEN
+    ? new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      })
     : null;
 
-/* ---------- helpers deterministas para simulación ---------- */
+/* ===================== Deterministic helpers ===================== */
+
 function smallHash(str: string) {
   let h = 2166136261 >>> 0;
   for (let i = 0; i < str.length; i++) {
@@ -38,9 +50,10 @@ function smallHash(str: string) {
   }
   return h >>> 0;
 }
+
 function xorshift32(seed: number) {
   let x = seed >>> 0;
-  return function () {
+  return () => {
     x ^= x << 13;
     x >>>= 0;
     x ^= x >>> 17;
@@ -51,90 +64,115 @@ function xorshift32(seed: number) {
   };
 }
 
-// Simula pequeños movimientos a partir del snapshot base
-function simulatePrices(
+/* ===================== Interpolation ONLY ===================== */
+
+// ⚠️ NO simulación de mercado: solo smoothing visual
+function interpolatePrices(
   wrapper: CacheWrapper,
   opts?: { maxPctPerMinute?: number; bucketMs?: number }
 ): Quote[] {
-  const maxPctPerMinute = opts?.maxPctPerMinute ?? 0.25;
+  const maxPctPerMinute = opts?.maxPctPerMinute ?? 0.03; // ⬅️ MUY bajo
   const bucketMs = opts?.bucketMs ?? 1000;
+
   const now = Date.now();
   const elapsedMs = Math.max(0, now - wrapper.ts);
   const elapsedMinutes = elapsedMs / 60000;
   const maxTotalPct = elapsedMinutes * maxPctPerMinute;
-  const cappedMaxPct = Math.min(maxTotalPct, Math.max(1, 3 * maxPctPerMinute));
+  const cappedPct = Math.min(maxTotalPct, maxPctPerMinute * 3);
   const bucketIndex = Math.floor(now / bucketMs);
 
-  return (wrapper.data || []).map((q) => {
-    if (typeof q.price !== "number" || Number.isNaN(q.price)) return { ...q };
-    const seed = (smallHash(q.symbol + "::sim") ^ bucketIndex) >>> 0;
-    const rand = xorshift32(seed)();
-    const signed = rand * 2 - 1;
-    const deltaFraction = signed * (cappedMaxPct / 100);
+  return wrapper.data.map((q) => {
+    if (typeof q.price !== "number" || !Number.isFinite(q.price)) {
+      return q;
+    }
+
+    const seed = (smallHash(q.symbol + "::interp") ^ bucketIndex) >>> 0;
+    const rand = xorshift32(seed)() * 2 - 1;
+
+    const deltaFraction = rand * (cappedPct / 100);
     const newPrice = q.price * (1 + deltaFraction);
     const prev =
       typeof q.previousClose === "number" ? q.previousClose : q.price;
-    const change = newPrice - prev;
-    const changePercent = prev !== 0 ? (change / prev) * 100 : 0;
 
     return {
       ...q,
       price: Number(newPrice.toFixed(6)),
-      change: Number(change.toFixed(6)),
-      changePercent: Number(changePercent.toFixed(6)),
+      change: Number((newPrice - prev).toFixed(6)),
+      changePercent: Number(
+        prev !== 0 ? (((newPrice - prev) / prev) * 100).toFixed(6) : 0
+      ),
     };
   });
 }
 
-// Lee wrapper desde Redis (si tu job ya lo escribe)
-async function getBaseWrapper(market: string): Promise<CacheWrapper | null> {
+/* ===================== Redis read ===================== */
+
+async function getBaseWrapper(
+  market: string
+): Promise<CacheWrapper | null> {
   if (!redis) return null;
+
   try {
-    const raw = await redis.get<CacheWrapper | string>(CACHE_KEY(market));
+    const raw = await redis.get<CacheWrapper | string>(
+      CACHE_KEY(market)
+    );
     if (!raw) return null;
+
     const parsed =
-      typeof raw === "string" ? (JSON.parse(raw) as CacheWrapper) : raw;
-    if (!parsed || !Array.isArray(parsed.data) || typeof parsed.ts !== "number")
+      typeof raw === "string"
+        ? (JSON.parse(raw) as CacheWrapper)
+        : raw;
+
+    if (
+      !parsed ||
+      typeof parsed.ts !== "number" ||
+      !Array.isArray(parsed.data)
+    ) {
       return null;
+    }
+
     return parsed;
   } catch {
     return null;
   }
 }
 
-// 🔹 NUEVO: fallback a /api/markets cuando no hay wrapper en Redis
-async function fetchBaseQuotesFromMarkets(origin: string, market: string): Promise<Quote[] | null> {
+/* ===================== Fallback to /api/markets ===================== */
+
+async function fetchFromMarkets(
+  origin: string,
+  market: string
+): Promise<CacheWrapper | null> {
   try {
     const res = await fetch(
       `${origin}/api/markets?market=${encodeURIComponent(market)}`,
       { cache: "no-store" }
     );
     if (!res.ok) return null;
+
     const data = (await res.json()) as Quote[];
     if (!Array.isArray(data)) return null;
-    return data;
+
+    return {
+      ts: Date.now(),
+      data,
+    };
   } catch {
     return null;
   }
 }
 
+/* ===================== SSE Handler ===================== */
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const { searchParams } = url;
-  const market = (searchParams.get("market") || "indices").toLowerCase();
-  const origin = url.origin; // para llamar a /api/markets
+  const market = (url.searchParams.get("market") || "indices").toLowerCase();
+  const origin = url.origin;
 
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
       let closed = false;
-      const safeClose = () => {
-        if (closed) return;
-        closed = true;
-        try {
-          controller.close();
-        } catch {}
-      };
 
       const write = (line: string) => {
         if (closed) return;
@@ -144,117 +182,114 @@ export async function GET(req: NextRequest) {
           closed = true;
         }
       };
-      const send = (obj: unknown) => write(`data: ${JSON.stringify(obj)}\n\n`);
 
-      // Encabezado SSE
+      const send = (obj: unknown) =>
+        write(`data: ${JSON.stringify(obj)}\n\n`);
+
+      // SSE headers
       write(`retry: 5000\n`);
       write(`event: ready\n`);
       write(`data: "ok"\n\n`);
 
-      // Heartbeat cada 10s
+      // heartbeat
       const heartbeat = setInterval(() => {
-        if (closed) return;
         write(`: ping ${Date.now()}\n\n`);
       }, 10000);
 
       let lastPrices: Record<string, number> = {};
       let lastForcedAt = 0;
 
-      // 🔹 NUEVO: baseFallback se llena una sola vez desde /api/markets si Redis está vacío
       let baseFallback: CacheWrapper | null = null;
 
-      // (1) snapshot inicial
+      /* ---------- initial snapshot ---------- */
       try {
         let base = await getBaseWrapper(market);
 
         if (!base) {
-          const baseQuotes = await fetchBaseQuotesFromMarkets(origin, market);
-          if (baseQuotes && baseQuotes.length > 0) {
-            base = {
-              ts: Date.now(),
-              data: baseQuotes,
-            };
-            baseFallback = base;
-          }
+          base = await fetchFromMarkets(origin, market);
+          baseFallback = base;
         }
 
         if (base) {
-          const simulated = simulatePrices(base, {
-            maxPctPerMinute: 0.25,
-            bucketMs: 1000,
-          });
+          const interpolated = interpolatePrices(base);
           const prices: Record<string, number> = {};
-          for (const q of simulated) {
+
+          for (const q of interpolated) {
             if (q?.symbol && typeof q.price === "number") {
               prices[q.symbol.toUpperCase()] = q.price;
             }
           }
+
           lastPrices = prices;
           lastForcedAt = Date.now();
           send({ prices });
         } else {
-          // ⬅ solo si falla Redis y también /api/markets
-          send({ prices: {}, note: "no-base-wrapper-and-no-markets" });
+          send({ prices: {}, note: "no-base-available" });
         }
       } catch {
-        send({ prices: {}, error: "initial_read_failed" });
+        send({ prices: {}, error: "initial_snapshot_failed" });
       }
 
-      // (2) loop cada 1s: re-simulación a partir de Redis o del fallback
+      /* ---------- tick loop ---------- */
       const tick = setInterval(async () => {
         if (closed) return;
+
         try {
-          // intenta Redis primero, si no hay, usa el fallback en memoria
-          const wrapper = (await getBaseWrapper(market)) ?? baseFallback;
+          const wrapper =
+            (await getBaseWrapper(market)) ?? baseFallback;
           if (!wrapper) return;
 
-          const simulated = simulatePrices(wrapper, {
-            maxPctPerMinute: 0.25,
-            bucketMs: 1000,
-          });
+          const interpolated = interpolatePrices(wrapper);
           const prices: Record<string, number> = {};
-          for (const q of simulated) {
+
+          for (const q of interpolated) {
             if (q?.symbol && typeof q.price === "number") {
               prices[q.symbol.toUpperCase()] = q.price;
             }
           }
 
           const changed =
-            Object.keys(prices).length !== Object.keys(lastPrices).length ||
-            Object.keys(prices).some((k) => prices[k] !== lastPrices[k]);
+            Object.keys(prices).length !==
+              Object.keys(lastPrices).length ||
+            Object.keys(prices).some(
+              (k) => prices[k] !== lastPrices[k]
+            );
 
           const now = Date.now();
-          const forceDue = now - lastForcedAt >= 10000; // fuerza cada 10s
+          const force = now - lastForcedAt >= 10_000;
 
-          if (changed || forceDue) {
+          if (changed || force) {
             lastPrices = prices;
             lastForcedAt = now;
-            if (closed) return;
             send({ prices });
           }
         } catch {
-          // sigue, heartbeat mantiene conexión
+          // noop
         }
       }, 1000);
 
-      // (3) auto-cierre a los 120s
+      /* ---------- auto close ---------- */
       const lifetime = setTimeout(() => {
-        safeClose();
+        closed = true;
         clearInterval(tick);
         clearInterval(heartbeat);
-        clearTimeout(lifetime);
-      }, 120000);
+        controller.close();
+      }, 120_000);
 
-      // (4) cleanup cuando el cliente cierra
-      const onAbort = () => {
+      /* ---------- cleanup ---------- */
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
         clearInterval(tick);
         clearInterval(heartbeat);
         clearTimeout(lifetime);
-        safeClose();
+        try {
+          controller.close();
+        } catch {}
       };
 
-      // Nota: si quieres, puedes enganchar onAbort a req.signal cuando Next lo soporte
-      // req.signal.addEventListener("abort", onAbort);
+      // cuando Next soporte req.signal:
+      // req.signal.addEventListener("abort", cleanup);
     },
   });
 
