@@ -21,23 +21,19 @@ type Quote = {
 };
 
 type CacheWrapper = {
-  ts: number;
+  ts: number;          // último update (real o simulado)
   data: Quote[];
+  anchorTs?: number;   // último snapshot REAL confirmado
 };
 
 /* ===================== Config ===================== */
 
 const API_KEY = process.env.ALPHA_VANTAGE_API_KEY!;
-
-// Alpha plan pago → configurable
 const ALPHA_RPM = Number(process.env.ALPHA_RPM ?? 500);
 const REQUEST_INTERVAL_MS = Math.ceil(60_000 / ALPHA_RPM);
 
-// cache
 const CACHE_TTL_SEC = 300;
 const CACHE_TTL_MS = CACHE_TTL_SEC * 1000;
-
-// ventana de datos reales
 const REAL_WINDOW_MS = 15_000;
 
 /* ===================== Redis / Memory ===================== */
@@ -59,7 +55,6 @@ const inflight = new Map<string, Promise<Quote[]>>();
 
 /* ===================== Alpha Guard ===================== */
 
-// backoff global (simple y efectivo en serverless)
 let alphaBlockedUntil = 0;
 
 function alphaAvailable() {
@@ -109,12 +104,26 @@ async function getCache(key: string): Promise<CacheWrapper | null> {
   return local;
 }
 
-async function setCache(key: string, data: Quote[]) {
-  const wrapper: CacheWrapper = { ts: Date.now(), data };
+async function setCache(
+  key: string,
+  data: Quote[],
+  isReal = false
+) {
+  const prev = await getCache(key);
+
+  const wrapper: CacheWrapper = {
+    ts: Date.now(),
+    data,
+    anchorTs: isReal
+      ? Date.now()
+      : prev?.anchorTs,
+  };
 
   if (redis) {
     try {
-      await redis.set(key, JSON.stringify(wrapper), { ex: CACHE_TTL_SEC });
+      await redis.set(key, JSON.stringify(wrapper), {
+        ex: CACHE_TTL_SEC,
+      });
       return;
     } catch {}
   }
@@ -133,7 +142,6 @@ async function fetchCrypto(symbol: string): Promise<Quote> {
   const res = await fetch(url);
   const json = await safeJson(res);
 
-  // Alpha NO siempre devuelve 429
   if (
     !res.ok ||
     !json ||
@@ -141,7 +149,7 @@ async function fetchCrypto(symbol: string): Promise<Quote> {
     json.Note
   ) {
     if (json?.Note) {
-      alphaBlockedUntil = Date.now() + 60_000; // 1 min
+      alphaBlockedUntil = Date.now() + 60_000;
       throw new Error("rate_limited");
     }
     throw new Error("alpha_failed");
@@ -163,33 +171,6 @@ async function fetchCrypto(symbol: string): Promise<Quote> {
   };
 }
 
-/* ===================== Mock ===================== */
-
-function vary(price: number, pct = 0.6) {
-  return Number(
-    (price * (1 + (Math.random() * 2 - 1) * pct / 100)).toFixed(6)
-  );
-}
-
-function getMock(market: string, symbols: string[]): Quote[] {
-  return symbols.map((s) => {
-    const base = MOCK_BASE[market]?.find((b) => b.symbol === s)?.price ?? 100;
-    const price = vary(base, 1.2);
-    const prev = base;
-
-    return {
-      symbol: s,
-      price,
-      previousClose: prev,
-      change: price - prev,
-      changePercent: ((price - prev) / prev) * 100,
-      latestTradingDay: new Date().toISOString(),
-      source: "mock",
-      market,
-    };
-  });
-}
-
 /* ===================== Simulation ===================== */
 
 function hash(str: string) {
@@ -209,13 +190,6 @@ function maxAbsDelta(price: number) {
   return price * 0.003;
 }
 
-const VOLATILITY_BY_MARKET: Record<string, number> = {
-  crypto: 1.0,
-  fx: 0.3,
-  indices: 0.2,
-  stocks: 0.4,
-};
-
 function simulate(wrapper: CacheWrapper): Quote[] {
   const now = Date.now();
   const bucket = Math.floor(now / 10_000);
@@ -227,10 +201,7 @@ function simulate(wrapper: CacheWrapper): Quote[] {
     const seed = hash(q.symbol + bucket);
     const rand = ((seed % 1000) / 1000) * 2 - 1;
 
-    const market = q.market ?? "crypto";
-    const vol = VOLATILITY_BY_MARKET[market] ?? 1;
-
-    const pctDelta = q.price * rand * maxPct * vol;
+    const pctDelta = q.price * rand * maxPct;
     const absCap = maxAbsDelta(q.price);
     const delta = Math.max(-absCap, Math.min(absCap, pctDelta)) * smooth;
 
@@ -240,11 +211,61 @@ function simulate(wrapper: CacheWrapper): Quote[] {
     return {
       ...q,
       price: Number(price.toFixed(6)),
-      high: q.high ? Math.max(q.high, price) : price,
-      low: q.low ? Math.min(q.low, price) : price,
       change: price - prev,
       changePercent: ((price - prev) / prev) * 100,
       source: "simulated",
+    };
+  });
+}
+
+/* ===================== Mock Derivado ===================== */
+
+function deriveMock(
+  wrapper: CacheWrapper,
+  market: string
+): Quote[] {
+  const now = Date.now();
+  const anchor = wrapper.anchorTs ?? wrapper.ts;
+  const elapsedMin = (now - anchor) / 60_000;
+
+  const maxPct = Math.min(elapsedMin * 0.1, 1) / 100;
+
+  return wrapper.data.map((q) => {
+    const seed = hash(q.symbol + Math.floor(now / 30_000));
+    const rand = ((seed % 1000) / 1000) * 2 - 1;
+
+    const delta = q.price * rand * maxPct * 0.5;
+    const price = q.price + delta;
+    const prev = q.previousClose ?? q.price;
+
+    return {
+      ...q,
+      price: Number(price.toFixed(6)),
+      change: price - prev,
+      changePercent: ((price - prev) / prev) * 100,
+      source: "mock",
+      market,
+    };
+  });
+}
+
+/* ===================== Base Mock ===================== */
+
+function getBaseMock(
+  market: string,
+  symbols: string[]
+): Quote[] {
+  return symbols.map((s) => {
+    const base =
+      MOCK_BASE[market]?.find((b) => b.symbol === s)?.price ??
+      100;
+
+    return {
+      symbol: s,
+      price: base,
+      latestTradingDay: new Date().toISOString(),
+      source: "mock",
+      market,
     };
   });
 }
@@ -258,7 +279,7 @@ async function fetchMarket(market: string): Promise<Quote[]> {
   for (const s of symbols) {
     const q = await fetchCrypto(s);
     results.push(q);
-    await sleep(REQUEST_INTERVAL_MS); // throttle garantizado
+    await sleep(REQUEST_INTERVAL_MS);
   }
 
   return results;
@@ -267,13 +288,6 @@ async function fetchMarket(market: string): Promise<Quote[]> {
 /* ===================== Handler ===================== */
 
 export async function GET(req: Request) {
-  if (!API_KEY) {
-    return NextResponse.json(
-      { error: "Missing API key" },
-      { status: 500 }
-    );
-  }
-
   const market =
     new URL(req.url).searchParams.get("market") ?? "crypto";
   const key = `market-${market}`;
@@ -283,7 +297,9 @@ export async function GET(req: Request) {
   // 1️⃣ Cache
   if (cached) {
     return NextResponse.json(
-      isFresh(cached) ? cached.data : simulate(cached),
+      isFresh(cached)
+        ? cached.data
+        : simulate(cached),
       { status: 200 }
     );
   }
@@ -294,7 +310,9 @@ export async function GET(req: Request) {
     const again = await getCache(key);
     if (again) {
       return NextResponse.json(
-        isFresh(again) ? again.data : simulate(again),
+        isFresh(again)
+          ? again.data
+          : simulate(again),
         { status: 200 }
       );
     }
@@ -303,7 +321,7 @@ export async function GET(req: Request) {
   // 3️⃣ Fetch real
   const p = (async () => {
     const data = await fetchMarket(market);
-    await setCache(key, data);
+    await setCache(key, data, true);
     return data;
   })();
 
@@ -313,9 +331,19 @@ export async function GET(req: Request) {
     const data = await p;
     return NextResponse.json(data, { status: 200 });
   } catch {
-    const fallback = cached
-      ? simulate(cached)
-      : getMock(market, SYMBOLS_MAP[market] ?? []);
+    let fallback: Quote[];
+
+    if (cached) {
+      const c = cached as CacheWrapper;
+      fallback = c.anchorTs
+        ? deriveMock(c, market)
+        : simulate(c);
+    } else {
+      fallback = getBaseMock(
+        market,
+        SYMBOLS_MAP[market] ?? []
+      );
+    }
 
     await setCache(key, fallback);
     return NextResponse.json(fallback, { status: 200 });
