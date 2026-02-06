@@ -1,4 +1,5 @@
 // src/components/trading-dashboard/SymbolList.tsx
+
 "use client";
 
 import React, { useMemo } from "react";

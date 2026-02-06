@@ -1,3 +1,4 @@
+//src/app/(public)/careers/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -71,7 +72,7 @@ export default function ContactFormView() {
           {/* Imagen */}
           <div className="relative w-full h-72 lg:h-full overflow-hidden rounded-2xl shadow-xl">
             <Image
-              src="/images/hands_square.webp"
+              src="/images/hands_square.png"
               alt="Hands square"
               fill
               className="object-cover object-center"

@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import ActionButton from "@/components/ui/ActionButton";
 import { LogIn } from "lucide-react";
-import ThemeSwitcher from "@/components/ui/ThemeSwitcher";
+// import ThemeSwitcher from "@/components/ui/ThemeSwitcher";
 import Image from "next/image";
 import { Menu, X } from "lucide-react";
 
@@ -129,9 +129,9 @@ export default function HeaderPublic() {
 
         {/* 🔸 Tema + Login + Hamburguesa */}
         <div className="flex items-center gap-3">
-          <div className="fixed top-full mt-1.5 right-6 z-50 opacity-50 hover:opacity-100 transition">
+          {/* <div className="fixed top-full mt-1.5 right-6 z-50 opacity-50 hover:opacity-100 transition">
             <ThemeSwitcher expandedWidth="w-36" />
-          </div>
+          </div> */}
           <ActionButton
             href="/sign-in"
             label="Iniciar sesión" 
