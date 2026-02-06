@@ -3,6 +3,8 @@ import { db } from "@/db";
 import { session } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
+export const runtime = "nodejs";
+
 export class SessionService {
   /**
    * Crear una sesión nueva

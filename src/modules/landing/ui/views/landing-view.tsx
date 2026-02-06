@@ -5,6 +5,19 @@ import { useState, useEffect } from "react";
 import MarketSection from "@/components/landing/MarketSection";
 import { useRouter, useSearchParams } from "next/navigation";
 
+const MARKET_KEY_MAP: Record<string, 
+  "crypto" | "indices" | "acciones" | "commodities" | "fx" | "all"
+> = {
+  Cryptocurrency: "crypto",
+  Indices: "indices",
+  Stocks: "acciones",
+  Commodities: "commodities",
+  Currencies: "fx",
+  ETFs: "all",
+  Bonds: "all",
+  Funds: "all",
+};
+
 // 🔹 Definición de mercados con botones internos y URLs dinámicas
 const MARKETS = {
   Indices: {
@@ -120,22 +133,16 @@ export default function LandingView() {
             </div>
           </header>
 
-          <MarketSection
-            title={mainMarket}
-            buttons={marketConfig.buttons}
-            getUrl={() => marketConfig.getUrl("")}
-            renderRow={(item) => ({
-              name: item.Name ?? item.Symbol ?? "—",
-              last: formatNum(item.Last),
-              high: formatNum(item.High),
-              low: formatNum(item.Low),
-              chg: formatNum(item.Chg),
-              chgPct: formatPct(item.ChgPct),
-              time: item.Time ?? "",
-              url: item.Url ?? "",
-            })}
-            onMarketChange={() => {}}
-          />
+        <MarketSection
+          title={MARKET_KEY_MAP[mainMarket]}
+          renderRow={(item) => ({
+            symbol: item.symbol,
+            price: item.price,
+            date: item.latestTradingDay,
+          })}
+          onMarketChange={() => {}}
+        />
+
         </div>
 
         <aside className="lg:col-span-1 space-y-6">
