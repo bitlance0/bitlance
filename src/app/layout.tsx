@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import AuthSync from "@/components/AuthSync";
+import { CookieProvider } from "@/components/common/CookieProvider";
+import CookieBanner from "@/components/common/CookieBanner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,16 +25,17 @@ export const metadata: Metadata = {
 const setInitialTheme = `(function() {
   try {
     var theme = localStorage.getItem('theme');
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.classList.toggle('dark', theme === 'dark');
     if (theme === 'dark' || theme === 'light') {
       document.documentElement.setAttribute('data-theme', theme);
       document.documentElement.classList.toggle('dark', theme === 'dark');
-    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    } else {
       document.documentElement.setAttribute('data-theme', 'dark');
       document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.setAttribute('data-theme', 'light');
-      document.documentElement.classList.remove('dark');
-    }
+    } 
+    
+    
   } catch (e) {}
 })();`;
 
@@ -53,14 +56,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </Script>
       </head>
       <body suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <Toaster position="top-right" richColors closeButton  />
-        <AuthSync>
-          <>
-            {/* <WhatsAppFloatingButton phoneNumber="34613974463"  /> */}
-            <WhatsAppFloatingButton phoneNumber="34632467796"  />
-            {children}
-          </>
-        </AuthSync>
+        <Toaster position="top-right" richColors closeButton />
+
+        <CookieProvider>
+          <AuthSync>
+            <>
+              <WhatsAppFloatingButton phoneNumber="34613974463" />
+              {children}
+              <CookieBanner />
+            </>
+          </AuthSync>
+        </CookieProvider>
       </body>
     </html>
   );

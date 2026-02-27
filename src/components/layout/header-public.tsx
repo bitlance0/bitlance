@@ -27,13 +27,13 @@ export default function HeaderPublic() {
     { name: "Plataforma de Trading", href: "/sign-in" },
     { name: "Conocimiento de Trading", href: "/trading-knowledge" },
     { name: "Trabaje con nosotros", href: "/careers" },
-    { name: "Soporte", href: "/support" },
+    // { name: "Soporte", href: "/support" },
   ];
 
   return (
     // <header className="fixed top-0 left-0 w-full z-50 border-b border-border bg-background/80 backdrop-blur-md">
     <header
-      className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md"
+      className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md bg-black/80"
     >
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
         {/* 🟡 Logo */}
@@ -108,20 +108,20 @@ export default function HeaderPublic() {
                 >
                   Política de Privacidad
                 </Link>
-                <Link
+                {/* <Link
                   href="/legal/disclaimer"
                   onClick={handleLegalLinkClick}
                   className="block px-4 py-2 hover:bg-muted transition-colors"
                 >
                   Descargo de Responsabilidad
-                </Link>
-                <Link
+                </Link> */}
+                {/* <Link
                   href="/legal/cookies"
                   onClick={handleLegalLinkClick}
                   className="block px-4 py-2 hover:bg-muted transition-colors"
                 >
                   Política de Cookies
-                </Link>
+                </Link> */}
               </div>
             )}
           </div>
