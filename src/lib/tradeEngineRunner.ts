@@ -2,51 +2,13 @@
 import { db } from "@/db";
 import { trades } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import SYMBOLS_MAP from "@/lib/symbolsMap";
+import { isSymbolMarketOpen } from "@/lib/marketSessions";
 
 const APP_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 const MARKET_URL = `${APP_BASE_URL}/api/markets?market=all`;
 const ACTIVATE_URL = `${APP_BASE_URL}/api/trade/pending/activate`;
 const CLOSE_URL = `${APP_BASE_URL}/api/trade/close`;
-
-function marketOfSymbol(sym: string | null): keyof typeof SYMBOLS_MAP | "acciones" {
-  if (!sym) return "acciones";
-  const S = sym.toUpperCase();
-  for (const [m, arr] of Object.entries(SYMBOLS_MAP)) {
-    if (arr.map((x) => x.toUpperCase()).includes(S)) return m as keyof typeof SYMBOLS_MAP;
-  }
-  return "acciones";
-}
-
-function isMarketOpenForMarket(market: string, now: Date): boolean {
-  const utc = new Date(now.toISOString());
-  const day = utc.getUTCDay();
-  const hour = utc.getUTCHours();
-  const minute = utc.getUTCMinutes();
-  const timeMinutes = hour * 60 + minute;
-
-  const inRange = (sh: number, sm: number, eh: number, em: number) => {
-    const start = sh * 60 + sm;
-    const end = eh * 60 + em;
-    return timeMinutes >= start && timeMinutes <= end;
-  };
-
-  if (market === "crypto") return true;
-
-  if (market === "fx") {
-    if (day === 0 || day === 6) return false;
-    return true;
-  }
-
-  if (["indices", "acciones", "commodities"].includes(market)) {
-    if (day === 0 || day === 6) return false;
-    return inRange(14, 30, 21, 0);
-  }
-
-  if (day === 0 || day === 6) return false;
-  return inRange(13, 0, 21, 0);
-}
 
 async function fetchPrices() {
   const res = await fetch(MARKET_URL);
@@ -75,8 +37,8 @@ async function processPendingTrades(priceMap: Map<string, number>, now: Date) {
 
       if (t.expiresAt && new Date(t.expiresAt) < now) continue;
 
-      const market = marketOfSymbol(symbol);
-      if (!isMarketOpenForMarket(market, now)) continue;
+      const marketStatus = isSymbolMarketOpen(symbol, now);
+      if (!marketStatus.open) continue;
 
       const trigger = Number(t.triggerPrice ?? 0);
       const rule = String(t.triggerRule ?? "");
@@ -109,8 +71,8 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
       const price = priceMap.get(symbol);
       if (!price) continue;
 
-      const market = marketOfSymbol(symbol);
-      if (!isMarketOpenForMarket(market, now)) continue;
+      const marketStatus = isSymbolMarketOpen(symbol, now);
+      if (!marketStatus.open) continue;
 
       const side = t.side === "sell" ? "sell" : "buy";
       const tp = t.takeProfit ? Number(t.takeProfit) : null;

@@ -7,7 +7,7 @@ export default function AnywhereSection() {
       id="platform"
       className="py-20 bg-background border-t border-border text-center"
     >
-      <div className="max-w-5xl mx-auto px-6">
+      <div className="max-w-5xl mx-auto px-4 md:px-6">
         <h2 className="text-3xl md:text-4xl font-bold mb-6">
           Opera desde cualquier lugar
         </h2>
@@ -16,13 +16,17 @@ export default function AnywhereSection() {
           desde tu computadora, tablet o smartphone, con total seguridad y
           velocidad.
         </p>
-        <Image
-          src="/images/platform-devices.png"
-          alt="Dispositivos BitLance"
-          className="mx-auto max-w-3xl rounded-2xl shadow-lg"
-          width={500}
-          height={300}
-        />
+        <div className="mx-auto w-full max-w-3xl">
+          <Image
+            src="/images/platform-devices.png"
+            alt="Dispositivos BitLance"
+            className="h-auto w-full rounded-2xl shadow-lg"
+            width={1200}
+            height={720}
+            sizes="(max-width: 768px) calc(100vw - 2rem), (max-width: 1024px) 80vw, 768px"
+            priority={false}
+          />
+        </div>
       </div>
     </section>
   );

@@ -12,7 +12,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   // const [mobileAsideOpen, setMobileAsideOpen] = useState(false);
 
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={false}>
       <div className="flex min-h-screen w-full">
         {/* Sidebar lateral */}
         <AppSidebar />

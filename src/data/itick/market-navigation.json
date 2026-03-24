@@ -1,0 +1,101 @@
+{
+  "scopes": {
+    "US": {
+      "label": "US",
+      "markets": {
+        "acciones": [
+          "NASDAQ",
+          "NYSE",
+          "AMEX",
+          "OTC",
+          "CBOE"
+        ],
+        "funds": [
+          "NASDAQ",
+          "NYSE",
+          "AMEX",
+          "OTC",
+          "CBOE"
+        ],
+        "commodities": [
+          "CME",
+          "CBOT",
+          "ICEUS",
+          "CBOE",
+          "NYMEX",
+          "COMEX"
+        ]
+      }
+    },
+    "GLOBAL": {
+      "label": "Global",
+      "markets": {
+        "acciones": [
+          "HKEX",
+          "SSE",
+          "SZSE",
+          "TWSE",
+          "TPEX",
+          "SGX",
+          "TSE",
+          "NAG",
+          "SAPSE",
+          "FSE",
+          "SET",
+          "NSE",
+          "FWB",
+          "MYX",
+          "BIST",
+          "BME",
+          "BMV",
+          "MIL",
+          "EURONEXT",
+          "TASE",
+          "BCBA",
+          "ASX",
+          "TSX",
+          "BVL",
+          "NSENG",
+          "PSX"
+        ],
+        "crypto": [
+          "BA",
+          "BT",
+          "PB"
+        ],
+        "forex": [
+          "GB"
+        ],
+        "indices": [
+          "GB",
+          "ES",
+          "TH",
+          "IN",
+          "DE"
+        ],
+        "commodities": [
+          "HK",
+          "CN"
+        ]
+      }
+    }
+  },
+  "marketLabels": {
+    "acciones": "Acciones",
+    "crypto": "Criptomonedas",
+    "forex": "Forex",
+    "indices": "Índices",
+    "commodities": "Futuros",
+    "funds": "Funds"
+  },
+  "defaultSelection": {
+    "scope": "US",
+    "marketByScope": {
+      "US": "acciones",
+      "GLOBAL": "crypto"
+    }
+  },
+  "marketAliases": {
+    "commodities": "future"
+  }
+}

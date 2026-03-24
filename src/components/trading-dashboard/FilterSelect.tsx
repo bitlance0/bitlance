@@ -1,7 +1,7 @@
 // src/components/trading-dashboard/FilterSelect.tsx
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import {
   Select,
   SelectContent,
@@ -10,69 +10,186 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMarketStore } from "@/stores/useMarketStore";
+import {
+  getAvailableDashboardMarkets,
+  getDashboardMarketLabel,
+  getDefaultSelectionForDashboardMarket,
+  getExchangesForDashboardMarket,
+  getRegionsForDashboardMarket,
+  getRegionLabel,
+  type DashboardMarketKey,
+} from "@/lib/itick/dashboardMarketHelpers";
+
+function toDashboardMarketKey(value: string | null): DashboardMarketKey | null {
+  if (!value) return null;
+  const valid: DashboardMarketKey[] = [
+    "favoritas",
+    "fx",
+    "indices",
+    "acciones",
+    "commodities",
+    "crypto",
+    "all",
+  ];
+  return valid.includes(value as DashboardMarketKey)
+    ? (value as DashboardMarketKey)
+    : null;
+}
 
 export function FilterSelect() {
   const {
-    markets,
     selectedMarket,
-    selectMarket,
     setSelectedMarket,
+    selectedScope,
+    setSelectedScope,
+    selectedExchange,
+    setSelectedExchange,
+    setSelectedSymbol,
+    setPreferredSymbol,
+    setMarketMessage,
   } = useMarketStore();
 
-  const didInitRef = useRef(false);
-  const switchingRef = useRef(false);
+  const markets = useMemo(() => getAvailableDashboardMarkets(), []);
+  const parsedSelectedMarket = toDashboardMarketKey(selectedMarket);
+  const activeMarket =
+    parsedSelectedMarket && markets.includes(parsedSelectedMarket)
+      ? parsedSelectedMarket
+      : (markets[0] ?? null);
 
-  // Selección por defecto al montar
+  const regionOptions = useMemo(() => {
+    if (!activeMarket) return [];
+    return getRegionsForDashboardMarket(activeMarket);
+  }, [activeMarket]);
+
+  const exchangeOptions = useMemo(() => {
+    if (!activeMarket || !selectedScope) return [];
+    return getExchangesForDashboardMarket(activeMarket, selectedScope);
+  }, [activeMarket, selectedScope]);
+
   useEffect(() => {
-    if (didInitRef.current) return;
-    didInitRef.current = true;
+    if (!activeMarket) return;
 
-    const def = markets.find((m) => m === "fx") || markets[0] || null;
-    if (!selectedMarket && def) {
-      // selectMarket acepta string; no hace falta castear a Market
-      void selectMarket(def);
+    if (!selectedMarket || selectedMarket !== activeMarket) {
+      const defaults = getDefaultSelectionForDashboardMarket(activeMarket);
+      setSelectedMarket(activeMarket);
+      setSelectedScope(defaults.scope);
+      setSelectedExchange(defaults.exchange);
+      return;
     }
-  }, [markets, selectedMarket, selectMarket]);
 
-  // Cambio con anti-ráfagas
-  const handleChange = async (value: string) => {
-    if (switchingRef.current) return;
-    switchingRef.current = true;
-    try {
-      const found = markets.find((m) => m === value);
-      if (!found) {
-        setSelectedMarket(null);
-        return;
+    if (!selectedScope || !regionOptions.includes(selectedScope)) {
+      const nextScope = regionOptions[0] ?? null;
+      setSelectedScope(nextScope);
+
+      if (nextScope) {
+        const exchanges = getExchangesForDashboardMarket(activeMarket, nextScope);
+        setSelectedExchange(exchanges[0] ?? null);
+      } else {
+        setSelectedExchange(null);
       }
-      await selectMarket(found); // tu store define (marketKey: string) => Promise<void>
-    } finally {
-      switchingRef.current = false;
+      return;
     }
+
+    if (!selectedExchange || !exchangeOptions.includes(selectedExchange)) {
+      setSelectedExchange(exchangeOptions[0] ?? null);
+    }
+  }, [
+    activeMarket,
+    selectedMarket,
+    selectedScope,
+    selectedExchange,
+    regionOptions,
+    exchangeOptions,
+    setSelectedMarket,
+    setSelectedScope,
+    setSelectedExchange,
+  ]);
+
+  const resetMarketSelection = () => {
+    setSelectedSymbol(null);
+    setPreferredSymbol(null);
+    setMarketMessage(null);
   };
 
-  // Valor controlado (si no hay selección y existe 'indices', úsalo)
-  const controlledValue: string | undefined =
-    selectedMarket ?? (markets.includes("fx") ? "fx" : undefined);
-
   return (
-    <Select
-      value={controlledValue}
-      onValueChange={handleChange}
-      disabled={switchingRef.current}
-    >
-      <SelectTrigger className="w-full border border-gray-50/80 text-yellow-300">
-        <SelectValue placeholder="Seleccionar mercado" />
-      </SelectTrigger>
+    <div className="grid grid-cols-1 gap-2">
+      <Select
+        value={activeMarket ?? undefined}
+        onValueChange={(value) => {
+          const nextMarket = toDashboardMarketKey(value);
+          if (!nextMarket) return;
 
-      <SelectContent className="text-yellow-300 border border-gray-50/80 bg-[#181a20e7]">
-        {markets.map((market) => (
-          <SelectItem key={market} value={market}>
-            {market === "fx"
-              ? "Forex"
-              : market}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+          if (nextMarket === "favoritas") {
+            setSelectedMarket(nextMarket);
+            setSelectedScope(null);
+            setSelectedExchange(null);
+            resetMarketSelection();
+            return;
+          }
+
+          const defaults = getDefaultSelectionForDashboardMarket(nextMarket);
+          setSelectedMarket(nextMarket);
+          setSelectedScope(defaults.scope);
+          setSelectedExchange(defaults.exchange);
+          resetMarketSelection();
+        }}
+      >
+        <SelectTrigger className="w-full border border-gray-50/80 text-yellow-300">
+          <SelectValue placeholder="Seleccionar mercado" />
+        </SelectTrigger>
+        <SelectContent className="text-yellow-300 border border-gray-50/80 bg-[#181a20e7]">
+          {markets.map((market) => (
+            <SelectItem key={market} value={market}>
+              {getDashboardMarketLabel(market)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <Select
+          value={selectedScope ?? undefined}
+          onValueChange={(value) => {
+            if (!activeMarket) return;
+            setSelectedScope(value);
+            const nextExchanges = getExchangesForDashboardMarket(activeMarket, value);
+            setSelectedExchange(nextExchanges[0] ?? null);
+            resetMarketSelection();
+          }}
+          disabled={!regionOptions.length}
+        >
+          <SelectTrigger className="w-full border border-gray-50/80 text-yellow-300">
+            <SelectValue placeholder="Region" />
+          </SelectTrigger>
+          <SelectContent className="text-yellow-300 border border-gray-50/80 bg-[#181a20e7]">
+            {regionOptions.map((region) => (
+              <SelectItem key={region} value={region}>
+                {getRegionLabel(region)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={selectedExchange ?? undefined}
+          onValueChange={(value) => {
+            setSelectedExchange(value);
+            resetMarketSelection();
+          }}
+          disabled={!exchangeOptions.length}
+        >
+          <SelectTrigger className="w-full border border-gray-50/80 text-yellow-300">
+            <SelectValue placeholder="Exchange" />
+          </SelectTrigger>
+          <SelectContent className="text-yellow-300 border border-gray-50/80 bg-[#181a20e7]">
+            {exchangeOptions.map((exchange) => (
+              <SelectItem key={exchange} value={exchange}>
+                {exchange}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
   );
 }

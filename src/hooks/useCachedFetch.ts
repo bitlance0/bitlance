@@ -12,6 +12,8 @@ type FetchResult<T = unknown> = {
 
 const CACHE = new Map<string, { data: unknown; timestamp: number }>();
 const IN_FLIGHT = new Map<string, Promise<unknown>>();
+const ERROR_CACHE = new Map<string, { error: string; timestamp: number }>();
+const ERROR_CACHE_TTL_MS = 20_000;
 
 // 🔹 Helper para crear una clave de dependencias estable
 function createDepsKey(dependencies: unknown[]): string {
@@ -55,6 +57,19 @@ export default function useCachedFetch<T = unknown>(
       return;
     }
 
+    const cachedError = ERROR_CACHE.get(url);
+    if (cachedError && Date.now() - cachedError.timestamp < ERROR_CACHE_TTL_MS) {
+      setState({
+        data: null,
+        loading: false,
+        error: cachedError.error,
+      });
+      return;
+    }
+    if (cachedError) {
+      ERROR_CACHE.delete(url);
+    }
+
     const inFlight = IN_FLIGHT.get(url);
     if (inFlight) {
       setState((s) => ({ ...s, loading: true }));
@@ -82,11 +97,29 @@ export default function useCachedFetch<T = unknown>(
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
 
-    const fetchPromise = fetch(url, { signal })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<T>;
-      });
+    const fetchPromise = fetch(url, { signal }).then(async (res) => {
+      let parsedBody: any = null;
+
+      try {
+        parsedBody = await res.clone().json();
+      } catch {
+        parsedBody = null;
+      }
+
+      if (!res.ok) {
+        const apiError =
+          (parsedBody && typeof parsedBody === "object" && parsedBody.error) ||
+          null;
+        const baseMessage = `HTTP ${res.status}`;
+        throw new Error(apiError ? `${baseMessage}: ${apiError}` : baseMessage);
+      }
+
+      if (parsedBody !== null) {
+        return parsedBody as T;
+      }
+
+      return res.json() as Promise<T>;
+    });
 
     IN_FLIGHT.set(url, fetchPromise);
     setState({ data: null, loading: true, error: null });
@@ -95,6 +128,7 @@ export default function useCachedFetch<T = unknown>(
       .then((json) => {
         const timestamp = Date.now();
         CACHE.set(url, { data: json, timestamp });
+        ERROR_CACHE.delete(url);
         IN_FLIGHT.delete(url);
         if (!cancelled) {
           setState({ 
@@ -107,11 +141,16 @@ export default function useCachedFetch<T = unknown>(
       })
       .catch((err) => {
         IN_FLIGHT.delete(url);
+        const errorMessage = err instanceof Error ? err.message : 'Fetch failed';
+        ERROR_CACHE.set(url, {
+          error: errorMessage,
+          timestamp: Date.now(),
+        });
         if (!cancelled) {
           setState({ 
             data: null, 
             loading: false, 
-            error: err instanceof Error ? err.message : 'Fetch failed'
+            error: errorMessage
           });
         }
       });

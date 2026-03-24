@@ -18,7 +18,7 @@ export default function AlphaCandleChart({ interval }: { interval: string }) {
       chartReady, chartType, isLoading, loadingMore, error,
       currentPrice, currentTime, isChangingSymbol, selectedSymbol, currentInterval,
     },
-    actions: { changeInterval, changeType, zoom, refresh },
+    actions: { changeInterval, changeType, zoom, refresh, dismissError },
   } = useAlphaChart(interval);
 
   return (
@@ -47,13 +47,13 @@ export default function AlphaCandleChart({ interval }: { interval: string }) {
           <BusyOverlay text={isChangingSymbol ? "Cambiando símbolo..." : "Inicializando gráfico..."} />
         )}
 
-        {isLoading && <LoadingOverlay />}
+        {isLoading && <LoadingOverlay text="Consultando..." />}
 
-        {error && (
+        {error && !isLoading && (
           <ErrorOverlay
             error={error}
             onRetry={refresh}
-            onDismiss={() => {/* simple dismiss: actualizar state externo si quisieras */}}
+            onDismiss={dismissError}
             retryDisabled={isLoading || isChangingSymbol}
           />
         )}

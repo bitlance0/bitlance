@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { trades, user, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { isSymbolMarketOpen } from "@/lib/marketSessions";
 
 export async function POST(req: Request) {
   try {
@@ -34,6 +35,18 @@ export async function POST(req: Request) {
 
     if (!["gte", "lte"].includes(triggerRule)) {
       return NextResponse.json({ success: false, error: "TriggerRule inválido" }, { status: 400 });
+    }
+
+    const marketStatus = isSymbolMarketOpen(String(symbol));
+    if (!marketStatus.open) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Mercado cerrado para ${String(symbol).toUpperCase()}. No se puede crear la orden ahora.`,
+          market: marketStatus.market,
+        },
+        { status: 400 }
+      );
     }
 
     // Validar usuario

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { trades, user, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { isSymbolMarketOpen } from "@/lib/marketSessions";
 
 export async function POST(req: Request) {
   try {
@@ -25,6 +26,18 @@ export async function POST(req: Request) {
         { success: false, error: "El trade no está en estado pending" },
         { status: 400 }
       );
+
+    const marketStatus = isSymbolMarketOpen(String(t.symbol));
+    if (!marketStatus.open) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Mercado cerrado para ${String(t.symbol).toUpperCase()}. No se puede activar la orden.`,
+          market: marketStatus.market,
+        },
+        { status: 400 }
+      );
+    }
 
     const trigger = Number(t.triggerPrice ?? 0);
     const rule = String(t.triggerRule ?? "");

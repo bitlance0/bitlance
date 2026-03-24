@@ -7,6 +7,8 @@
    ======================================================================== */
 
 :root {
+  color-scheme: dark;
+
   /* Colores base */
   --amarillo-principal: #F0B90B;
   --amarillo-claro: #FFD666;
@@ -97,24 +99,19 @@
   --table-row-hover: var(--color-surface-alt);
 }
 
-/* Tema claro */
-[data-theme="light"] {
-  --color-bg: #FFFFFF;
-  --color-text: #181A20;
-  --popover: #FFFFFF;
-  --popover-foreground: #181A20;
-  --sidebar-bg: #F5F5F7;
-  --sidebar-foreground: #181A20;
-
-  --table-row-bg: var(--color-table-row-muted);
-  --table-row-hover: var(--color-surface);
-}
+/* Tema claro deshabilitado: la app opera siempre en dark mode */
 
 /* ========================================================================
    🔹 BASE
    ======================================================================== */
 
 @layer base {
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+  }
+
   * {
     border-color: var(--color-border);
     outline-color: color-mix(in srgb, var(--color-primary) 50%, transparent);

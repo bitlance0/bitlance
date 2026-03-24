@@ -178,7 +178,8 @@ export async function GET(req: NextRequest) {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(line));
-        } catch {
+        } catch (err) {
+          // Cliente cerró la conexión o controller ya cerrado
           closed = true;
         }
       };
@@ -193,6 +194,10 @@ export async function GET(req: NextRequest) {
 
       // heartbeat
       const heartbeat = setInterval(() => {
+        if (closed) {
+          clearInterval(heartbeat);
+          return;
+        }
         write(`: ping ${Date.now()}\n\n`);
       }, 10000);
 
@@ -232,7 +237,10 @@ export async function GET(req: NextRequest) {
 
       /* ---------- tick loop ---------- */
       const tick = setInterval(async () => {
-        if (closed) return;
+        if (closed) {
+          clearInterval(tick);
+          return;
+        }
 
         try {
           const wrapper =
@@ -263,18 +271,13 @@ export async function GET(req: NextRequest) {
             lastForcedAt = now;
             send({ prices });
           }
-        } catch {
-          // noop
+        } catch (err) {
+          // Si falla enviar datos, probablemente el cliente cerró la conexión
+          if (closed) {
+            clearInterval(tick);
+          }
         }
       }, 1000);
-
-      /* ---------- auto close ---------- */
-      const lifetime = setTimeout(() => {
-        closed = true;
-        clearInterval(tick);
-        clearInterval(heartbeat);
-        controller.close();
-      }, 120_000);
 
       /* ---------- cleanup ---------- */
       const cleanup = () => {
@@ -285,8 +288,15 @@ export async function GET(req: NextRequest) {
         clearTimeout(lifetime);
         try {
           controller.close();
-        } catch {}
+        } catch (err) {
+          // Controller ya cerrado, ignorar
+        }
       };
+
+      /* ---------- auto close ---------- */
+      const lifetime = setTimeout(() => {
+        cleanup();
+      }, 120_000);
 
       // cuando Next soporte req.signal:
       // req.signal.addEventListener("abort", cleanup);

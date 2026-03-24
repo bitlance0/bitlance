@@ -22,12 +22,14 @@ type Quote = {
 /* ========= Config ========= */
 const APP_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"; // ⚠️ pon aquí el dominio de Render
-const MARKET_URL = `${APP_BASE_URL}/api/markets?market=all`;
 const ACTIVATE_URL = `${APP_BASE_URL}/api/trade/pending/activate`;
 const CLOSE_URL = `${APP_BASE_URL}/api/trade/close`;
 
 const ENGINE_INTERVAL_MS = Number(process.env.TRADE_ENGINE_INTERVAL_MS ?? 5000); // 5s
 const ENGINE_ENABLED = process.env.TRADE_ENGINE_ENABLED !== "false";
+
+// Mercados válidos que podemos consultar
+const VALID_MARKETS = Object.keys(SYMBOLS_MAP) as Array<keyof typeof SYMBOLS_MAP>;
 
 /* ========= Helpers de mercado ========= */
 
@@ -80,21 +82,51 @@ function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
-/** Devuelve un Map SYMBOL -> price */
+/** Devuelve un Map SYMBOL -> price agregando datos de todos los mercados */
 async function fetchPrices(): Promise<Map<string, number>> {
-  const res = await fetch(MARKET_URL);
-  if (!res.ok) {
-    console.error("❌ trade-engine: error al llamar /api/markets:", res.status);
+  const map = new Map<string, number>();
+  
+  try {
+    for (const market of VALID_MARKETS) {
+      try {
+        const url = `${APP_BASE_URL}/api/markets?market=${market}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        
+        if (!res.ok) {
+          console.warn(`⚠️ trade-engine: error al llamar /api/markets para ${market}: ${res.status}`);
+          continue;
+        }
+        
+        const data: Quote[] = await res.json();
+        
+        if (!Array.isArray(data)) {
+          console.warn(`⚠️ trade-engine: respuesta inválida para ${market}`);
+          continue;
+        }
+        
+        for (const q of data) {
+          if (q && q.symbol && typeof q.price === "number") {
+            map.set(q.symbol.toUpperCase(), q.price);
+          }
+        }
+      } catch (error) {
+        console.warn(`⚠️ trade-engine: error obteniendo mercado ${market}:`, error);
+        continue;
+      }
+      
+      // Pequeño delay entre requests para no sobrecargar
+      await sleep(500);
+    }
+    
+    if (map.size === 0) {
+      console.error("❌ trade-engine: No se obtuvieron precios de ningún mercado");
+    }
+    
+    return map;
+  } catch (error) {
+    console.error("❌ trade-engine: Error crítico en fetchPrices:", error);
     return new Map();
   }
-  const data: Quote[] = await res.json();
-  const map = new Map<string, number>();
-  for (const q of data) {
-    if (q && q.symbol && typeof q.price === "number") {
-      map.set(q.symbol.toUpperCase(), q.price);
-    }
-  }
-  return map;
 }
 
 /* ========= Lógica: procesar pendientes ========= */

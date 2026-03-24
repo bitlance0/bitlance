@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { trades, user, transactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { isSymbolMarketOpen } from "@/lib/marketSessions";
 
 export async function POST(req: Request) {
   try {
@@ -20,6 +21,18 @@ export async function POST(req: Request) {
     if (!userId || !symbol || !side || !entryPrice || !quantity) {
       return NextResponse.json(
         { success: false, error: "Faltan campos obligatorios" },
+        { status: 400 }
+      );
+    }
+
+    const marketStatus = isSymbolMarketOpen(String(symbol));
+    if (!marketStatus.open) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Mercado cerrado para ${String(symbol).toUpperCase()}. Intenta durante horario habil.`,
+          market: marketStatus.market,
+        },
         { status: 400 }
       );
     }

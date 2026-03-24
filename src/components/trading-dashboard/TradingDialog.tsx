@@ -29,6 +29,7 @@ import { OrderPanelMarket } from "./trading-dialog-components/OrderPanelMarket";
 import { DialogHeaderTrade } from "./trading-dialog-components/DialogHeaderTrade";
 import { OrderPanelPending } from "./trading-dialog-components/OrderPanelPending";
 import { toast } from "sonner";
+import { useConfirm } from "@/components/common/ConfirmDialog";
 
 export interface TradingDialogProps {
   text: string;
@@ -53,6 +54,8 @@ function marketOfSymbol(
     if (arr.map((x) => x.toUpperCase()).includes(S))
       return m as keyof typeof SYMBOLS_MAP;
   }
+  if (S.endsWith("USDT")) return "crypto";
+  if (/^[A-Z]{6}$/.test(S)) return "fx";
   return "acciones";
 }
 
@@ -138,6 +141,8 @@ export function TradingDialog({
   }, []);
 
   const { user, updateUserBalance } = useUserStore();
+  const refreshSymbolQuote = useMarketStore((s) => s.refreshSymbolQuote);
+  const confirm = useConfirm();
 
   const liveFromStore = useMarketStore((s) => {
     if (!symbol) return undefined;
@@ -445,6 +450,21 @@ export function TradingDialog({
 
     const hasTP = takeProfit.trim() !== "";
     const hasSL = stopLoss.trim() !== "";
+    const refreshedMid = symbol ? await refreshSymbolQuote(symbol) : undefined;
+    const effectiveMid =
+      typeof refreshedMid === "number" && Number.isFinite(refreshedMid) && refreshedMid > 0
+        ? refreshedMid
+        : liveMid;
+    const entryPriceForOrder =
+      Number.isFinite(effectiveMid) && effectiveMid > 0
+        ? Number(
+            (
+              operationType === "buy"
+                ? effectiveMid * (1 - spread)
+                : effectiveMid * (1 + spread)
+            ).toFixed(PRICE_DECIMALS)
+          )
+        : currentPrice;
 
     try {
       const res = await fetch("/api/trade/open", {
@@ -454,7 +474,7 @@ export function TradingDialog({
           userId: user.id,
           symbol,
           side: operationType,
-          entryPrice: currentPrice,
+          entryPrice: entryPriceForOrder,
           quantity: calculations.cantidad,
           leverage: 1,
           takeProfit: hasTP ? takeProfitNum : null,
@@ -528,14 +548,33 @@ export function TradingDialog({
     !pendingValid || calculations.cantidad <= 0 || !isMarketOpen;
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen && !isMarketOpen) {
+          void confirm({
+            title: "Mercado cerrado",
+            description: `El activo ${symbol ?? ""} no se puede operar en este momento.`,
+            confirmText: "Entendido",
+            cancelText: "Cerrar",
+          });
+          setIsOpen(false);
+          return;
+        }
+        setIsOpen(nextOpen);
+      }}
+    >
       <DialogTrigger asChild>
         <Button
           variant="outline"
           style={colorText ? { color: colorText } : undefined}
-          className="min-w-[60px]"
+          className="h-8 w-full min-w-[74px] px-2 text-xs sm:text-sm"
           onClick={() => setIsOpen(true)}
-          title={symbol || undefined}
+          title={
+            !isMarketOpen
+              ? `${symbol ?? "Activo"} - mercado cerrado`
+              : symbol || undefined
+          }
         >
           {triggerLabel}
         </Button>

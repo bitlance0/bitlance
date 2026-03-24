@@ -15,7 +15,7 @@ export default function HeroSection() {
         playsInline
       />
       <div className="absolute inset-0 bg-black/60" />
-      <div className="relative z-10 text-center text-white px-6">
+      <div className="relative z-10 text-center text-white px-4 md:px-6">
         <h1 className="text-4xl md:text-6xl font-bold mb-6">
           Invierte Inteligentemente con{" "}
           <span className="text-[var(--amarillo-principal)]">BitLance</span>

@@ -21,7 +21,7 @@ export function useOperationsInfo() {
   const CURRENCY = "USD";
 
   const { user, updateUserBalance } = useUserStore();
-  const { dataMarket, getLivePrice } = useMarketStore();
+  const { dataMarket, getLivePrice, refreshSymbolQuote } = useMarketStore();
   const confirm = useConfirm();
 
   const [openTrades, setOpenTrades] = useState<Trade[]>([]);
@@ -363,7 +363,11 @@ export function useOperationsInfo() {
     entryPrice: string
   ) {
     const fallback = Number.parseFloat(entryPrice || "0");
-    const marketPrice = resolveLivePrice(symbol, fallback);
+    const refreshed = await refreshSymbolQuote(symbol);
+    const marketPrice =
+      typeof refreshed === "number" && Number.isFinite(refreshed) && refreshed > 0
+        ? refreshed
+        : resolveLivePrice(symbol, fallback);
     const closePrice =
       Number.isFinite(marketPrice) && marketPrice > 0 ? marketPrice : fallback;
 
