@@ -79,13 +79,10 @@ export function useOperationsInfo() {
   /* ---------------------------------- Fetch ---------------------------------- */
   const fetchTradesAll = async () => {
     if (!user?.id) return;
-    const userId = String(user.id);
 
     try {
       const res = await fetch(
-        `/api/trade/list?userId=${encodeURIComponent(
-          userId
-        )}&status=all&ts=${Date.now()}`,
+        `/api/trade/list?status=all&ts=${Date.now()}`,
         { cache: "no-store" }
       );
       const data = await res.json();
@@ -110,13 +107,10 @@ export function useOperationsInfo() {
   const fetchTradesByStatus = async (status: "open" | "closed" | "all") => {
     if (status === "all") return fetchTradesAll();
     if (!user?.id) return;
-    const userId = String(user.id);
 
     try {
       const res = await fetch(
-        `/api/trade/list?userId=${encodeURIComponent(
-          userId
-        )}&status=${status}&ts=${Date.now()}`,
+        `/api/trade/list?status=${status}&ts=${Date.now()}`,
         { cache: "no-store" }
       );
       const data = await res.json();
@@ -320,7 +314,7 @@ export function useOperationsInfo() {
             const res = await fetch("/api/trade/pending/activate", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ tradeId: p.id, currentPrice: live }),
+              body: JSON.stringify({ tradeId: p.id }),
             });
             const data = await res.json();
 
@@ -359,22 +353,13 @@ export function useOperationsInfo() {
   /* --------------------------- API helper para cierre --------------------------- */
   async function apiCloseTrade(
     tradeId: string | number,
-    symbol: string,
-    entryPrice: string
+    symbol: string
   ) {
-    const fallback = Number.parseFloat(entryPrice || "0");
-    const refreshed = await refreshSymbolQuote(symbol);
-    const marketPrice =
-      typeof refreshed === "number" && Number.isFinite(refreshed) && refreshed > 0
-        ? refreshed
-        : resolveLivePrice(symbol, fallback);
-    const closePrice =
-      Number.isFinite(marketPrice) && marketPrice > 0 ? marketPrice : fallback;
-
+    await refreshSymbolQuote(symbol);
     const res = await fetch("/api/trade/close", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tradeId, closePrice }),
+      body: JSON.stringify({ tradeId }),
     });
 
     const data = await res.json();
@@ -413,7 +398,7 @@ export function useOperationsInfo() {
 
     try {
       const data = await toast.promise(
-        apiCloseTrade(trade.id, trade.symbol, trade.entryPrice),
+        apiCloseTrade(trade.id, trade.symbol),
         {
           loading: `Cerrando ${trade.symbol}…`,
           success: (d) =>

@@ -1,13 +1,65 @@
-// /app/api/trade/close/route.ts
 import { NextResponse } from "next/server";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { trades, user, transactions } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { trades, transactions, user } from "@/db/schema";
+import { getActor } from "@/modules/auth/services/getActor";
+import { isSymbolMarketOpen } from "@/lib/marketSessions";
+import {
+  fetchItickLatestQuote,
+  ItickQuoteError,
+  type ItickQuoteContext,
+} from "@/lib/itick/quoteServer";
+
+function isInternalTradeEngineRequest(req: Request) {
+  const internalKey = process.env.TRADE_ENGINE_INTERNAL_KEY?.trim();
+  const headerKey = req.headers.get("x-trade-engine-key");
+  if (internalKey) return headerKey === internalKey;
+  if (process.env.NODE_ENV !== "production") return headerKey === "dev-local";
+  return false;
+}
+
+function parseTradeMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata) return {};
+  if (typeof metadata === "object") return metadata as Record<string, unknown>;
+  if (typeof metadata !== "string") return {};
+  try {
+    const parsed = JSON.parse(metadata) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveQuoteError(error: unknown) {
+  if (error instanceof ItickQuoteError) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: error.message,
+        detail: error.detail,
+      },
+      { status: error.status }
+    );
+  }
+  return null;
+}
 
 export async function POST(req: Request) {
   try {
-    const { tradeId, closePrice } = await req.json();
+    const internalRequest = isInternalTradeEngineRequest(req);
+    const actor = internalRequest ? null : await getActor(req);
 
+    if (!internalRequest && !actor?.user?.id) {
+      return NextResponse.json(
+        { success: false, error: "No autenticado" },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json();
+    const tradeId = String(body?.tradeId ?? "").trim();
     if (!tradeId) {
       return NextResponse.json(
         { success: false, error: "Falta tradeId" },
@@ -15,12 +67,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1️⃣ Buscar trade por id
-    const [trade] = await db
-      .select()
-      .from(trades)
-      .where(eq(trades.id, String(tradeId)));
-
+    const [trade] = await db.select().from(trades).where(eq(trades.id, tradeId));
     if (!trade) {
       return NextResponse.json(
         { success: false, error: "Trade no encontrado" },
@@ -28,146 +75,172 @@ export async function POST(req: Request) {
       );
     }
 
-    if (trade.status === "closed") {
+    if (!internalRequest && actor?.user?.id !== trade.userId) {
       return NextResponse.json(
-        { success: false, error: "La operación ya está cerrada" },
+        { success: false, error: "No autorizado para cerrar este trade" },
+        { status: 403 }
+      );
+    }
+
+    if (trade.status !== "open") {
+      return NextResponse.json(
+        { success: false, error: "La operacion no esta abierta" },
         { status: 400 }
       );
     }
 
-    // Opcional: evitar cerrar órdenes pendientes con este endpoint
-    if (trade.status === "pending") {
+    const marketStatus = isSymbolMarketOpen(String(trade.symbol));
+    if (!marketStatus.open) {
       return NextResponse.json(
-        { success: false, error: "No puedes cerrar una orden pendiente con este endpoint" },
+        {
+          success: false,
+          error: `Mercado cerrado para ${String(trade.symbol).toUpperCase()}. No se puede cerrar manualmente ahora.`,
+          market: marketStatus.market,
+        },
         { status: 400 }
       );
     }
 
     const entry = Number(trade.entryPrice ?? 0);
-    const qty = Number(trade.quantity ?? 0);
-    const lev = Number(trade.leverage ?? 1);
-
-    if (!entry || !qty) {
+    const quantity = Number(trade.quantity ?? 0);
+    const leverage = Number(trade.leverage ?? 1);
+    if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(quantity) || quantity <= 0) {
       return NextResponse.json(
-        { success: false, error: "Datos de trade incompletos (entry/quantity)" },
+        { success: false, error: "Trade con entry/quantity invalido" },
         { status: 400 }
       );
     }
 
-    // 2️⃣ Derivar precio de cierre si no llegó
-    const close =
-      closePrice && Number(closePrice) > 0
-        ? Number(closePrice)
-        : Number((entry * (1 + (Math.random() - 0.5) * 0.02)).toFixed(5));
+    const metadata = parseTradeMetadata(trade.metadata);
+    const quoteContextRaw =
+      typeof metadata.quoteContext === "object" && metadata.quoteContext !== null
+        ? (metadata.quoteContext as Record<string, unknown>)
+        : {};
+    const quoteContext: ItickQuoteContext = {
+      market: String(quoteContextRaw.market ?? ""),
+      exchange: String(quoteContextRaw.exchange ?? ""),
+      scope: String(quoteContextRaw.scope ?? ""),
+    };
 
+    const quote = await fetchItickLatestQuote(String(trade.symbol), quoteContext);
+    const close = quote.price;
     const sideFactor = trade.side === "buy" ? 1 : -1;
 
-    // PnL en función de la diferencia, cantidad y apalancamiento
-    const profit = Number(
-      ((close - entry) * qty * lev * sideFactor).toFixed(2)
-    );
-
-    // 3️⃣ Leer metadata y margen usado
-    const mdRaw =
-      typeof trade.metadata === "string"
-        ? (() => {
-            try {
-              return JSON.parse(trade.metadata);
-            } catch {
-              return {};
-            }
-          })()
-        : (trade.metadata as any) || {};
-
-    const marginUsed = Number(mdRaw.marginUsed ?? entry * qty) || 0;
-
-    // Dinero que vuelve a la cuenta: margen liberado + PnL
+    const profit = Number(((close - entry) * quantity * leverage * sideFactor).toFixed(2));
+    const marginFromMetadata = Number(metadata.marginUsed ?? 0);
+    const marginUsed = Number.isFinite(marginFromMetadata) && marginFromMetadata > 0
+      ? marginFromMetadata
+      : Number(((entry * quantity) / leverage).toFixed(2));
     const cashDelta = Number((marginUsed + profit).toFixed(2));
 
-    // 4️⃣ Actualizar trade en BD
     const closedAt = new Date();
 
-    await db
-      .update(trades)
-      .set({
-        closePrice: close.toFixed(4),
-        profit: profit.toFixed(2),
-        status: "closed",
-        closedAt,
-        // mantenemos metadata original + bandera de cierre
-        metadata: {
-          ...mdRaw,
-          closedBy: "manual",
-          closedReason: "user_close",
-        },
-      })
-      .where(eq(trades.id, trade.id));
+    const result = await db.transaction(async (tx) => {
+      const [closedTrade] = await tx
+        .update(trades)
+        .set({
+          closePrice: close.toFixed(4),
+          profit: profit.toFixed(2),
+          status: "closed",
+          closedAt,
+          metadata: {
+            ...metadata,
+            closedBy: internalRequest ? "engine" : "manual",
+            closedReason: internalRequest ? "engine_signal" : "user_close",
+            quoteSource: "itick",
+            closeQuoteContext: {
+              market: quote.market,
+              exchange: quote.exchange,
+              region: quote.region,
+              apiType: quote.apiType,
+            },
+            closeQuoteTimestamp: quote.latestTradingDay || null,
+          },
+        })
+        .where(and(eq(trades.id, trade.id), eq(trades.status, "open")))
+        .returning();
 
-    // 5️⃣ Obtener usuario y balance actual
-    const [u] = await db.select().from(user).where(eq(user.id, trade.userId));
-    if (!u) {
+      if (!closedTrade) {
+        throw new Error("TRADE_ALREADY_CLOSED");
+      }
+
+      const [updatedUser] = await tx
+        .update(user)
+        .set({
+          balance: sql`(${user.balance}::numeric + ${cashDelta})::numeric`,
+        })
+        .where(eq(user.id, trade.userId))
+        .returning({
+          balance: user.balance,
+        });
+
+      if (!updatedUser) {
+        throw new Error("USER_NOT_FOUND");
+      }
+
+      await tx.insert(transactions).values({
+        id: crypto.randomUUID(),
+        userId: trade.userId,
+        type: "trade",
+        amount: cashDelta.toFixed(2),
+        status: "completed",
+        currency: "USD",
+        metadata: {
+          kind: "trade_close",
+          tradeId: trade.id,
+          symbol: trade.symbol,
+          side: trade.side,
+          entryPrice: entry.toFixed(4),
+          closePrice: close.toFixed(4),
+          quantity,
+          leverage,
+          profit,
+          marginUsed,
+          cashDelta,
+        },
+      });
+
+      return {
+        trade: closedTrade,
+        balanceAfter: Number(updatedUser.balance),
+      };
+    });
+
+    return NextResponse.json({
+      success: true,
+      trade: {
+        ...result.trade,
+        entryPrice: entry.toFixed(4),
+        closePrice: close,
+        quantity,
+        leverage,
+        profit,
+        closedAt: closedAt.toISOString(),
+        newBalance: Number(result.balanceAfter.toFixed(2)),
+      },
+      newBalance: Number(result.balanceAfter.toFixed(2)),
+    });
+  } catch (error) {
+    const quoteErrorResponse = resolveQuoteError(error);
+    if (quoteErrorResponse) return quoteErrorResponse;
+
+    if (error instanceof Error && error.message === "TRADE_ALREADY_CLOSED") {
+      return NextResponse.json(
+        { success: false, error: "La operacion ya fue cerrada" },
+        { status: 409 }
+      );
+    }
+
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
       return NextResponse.json(
         { success: false, error: "Usuario asociado al trade no encontrado" },
         { status: 404 }
       );
     }
 
-    const currentBalance = Number(u.balance ?? 0);
-    const newBalance = Number((currentBalance + cashDelta).toFixed(2));
-
-    // 6️⃣ Actualizar balance de usuario
-    await db
-      .update(user)
-      .set({ balance: newBalance.toFixed(2) })
-      .where(eq(user.id, trade.userId));
-
-    // 7️⃣ Insertar transacción de cierre
-    await db.insert(transactions).values({
-      id: crypto.randomUUID(),
-      userId: trade.userId,
-      type: "trade", // mantenemos el union type del schema
-      amount: cashDelta.toFixed(2),
-      status: "completed",
-      currency: "USD",
-      metadata: {
-        kind: "trade_close",
-        tradeId: trade.id,
-        symbol: trade.symbol,
-        side: trade.side,
-        entryPrice: entry.toFixed(4),
-        closePrice: close.toFixed(4),
-        quantity: qty,
-        leverage: lev,
-        profit,
-        marginUsed,
-        cashDelta,
-      } as any,
-    } as any);
-
-    // 8️⃣ Respuesta
-    return NextResponse.json({
-      success: true,
-      trade: {
-        id: trade.id,
-        symbol: trade.symbol,
-        side: trade.side,
-        entryPrice: entry.toFixed(4),
-        closePrice: close, // número
-        quantity: qty,
-        leverage: lev,
-        profit, // número
-        status: "closed",
-        createdAt: trade.createdAt,
-        closedAt: closedAt.toISOString(),
-        metadata: mdRaw,
-        newBalance,
-      },
-      newBalance, // número global
-    });
-  } catch (error) {
-    console.error("❌ close trade:", error);
+    console.error("Error cerrando trade:", error);
     return NextResponse.json(
-      { success: false, error: String(error) },
+      { success: false, error: "Error interno cerrando operacion" },
       { status: 500 }
     );
   }

@@ -284,6 +284,9 @@ export default function SymbolRow({
             sellPrice={sellPrice}
             buyPrice={buyPrice}
             isMarketOpen={isMarketOpen}
+            market={rowMarket ?? symbolMarket}
+            exchange={typeof source === "string" ? source : null}
+            scope={null}
           />
         </div>
 
@@ -302,6 +305,9 @@ export default function SymbolRow({
             sellPrice={sellPrice}
             buyPrice={buyPrice}
             isMarketOpen={isMarketOpen}
+            market={rowMarket ?? symbolMarket}
+            exchange={typeof source === "string" ? source : null}
+            scope={null}
           />
         </div>
       </div>

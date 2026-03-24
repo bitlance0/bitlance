@@ -45,14 +45,14 @@ export default function TradingDashboard() {
   }, []);
 
   const {
+    selectedSymbol,
+    setSelectedSymbol,
     selectedMarket,
     setSelectedMarket,
     selectedScope,
     setSelectedScope,
     selectedExchange,
     setSelectedExchange,
-    selectedSymbol,
-    setSelectedSymbol,
     preferredSymbol,
     favoriteSymbols,
     setDataMarket,

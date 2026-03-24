@@ -5,8 +5,6 @@ import { trades } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import SYMBOLS_MAP from "@/lib/symbolsMap";
 
-type TradeRow = typeof trades.$inferSelect;
-
 type Quote = {
   symbol: string;
   price: number;
@@ -19,32 +17,38 @@ type Quote = {
   market?: string;
 };
 
+type Market = keyof typeof SYMBOLS_MAP;
+type TradeRow = typeof trades.$inferSelect;
+type TradeStatus = NonNullable<TradeRow["status"]>;
+type TriggerRule = "gte" | "lte";
+
 /* ========= Config ========= */
 const APP_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"; // ⚠️ pon aquí el dominio de Render
 const ACTIVATE_URL = `${APP_BASE_URL}/api/trade/pending/activate`;
 const CLOSE_URL = `${APP_BASE_URL}/api/trade/close`;
+const TRADE_ENGINE_INTERNAL_KEY = process.env.TRADE_ENGINE_INTERNAL_KEY?.trim();
 
 const ENGINE_INTERVAL_MS = Number(process.env.TRADE_ENGINE_INTERVAL_MS ?? 5000); // 5s
 const ENGINE_ENABLED = process.env.TRADE_ENGINE_ENABLED !== "false";
 
 // Mercados válidos que podemos consultar
-const VALID_MARKETS = Object.keys(SYMBOLS_MAP) as Array<keyof typeof SYMBOLS_MAP>;
+const VALID_MARKETS = Object.keys(SYMBOLS_MAP) as Market[];
 
 /* ========= Helpers de mercado ========= */
 
-function marketOfSymbol(sym: string | null): keyof typeof SYMBOLS_MAP | "acciones" {
+function marketOfSymbol(sym: string | null): Market {
   if (!sym) return "acciones";
   const S = sym.toUpperCase();
-  for (const [m, arr] of Object.entries(SYMBOLS_MAP)) {
+  for (const [m, arr] of Object.entries(SYMBOLS_MAP) as [Market, string[]][]) {
     if (arr.map((x) => x.toUpperCase()).includes(S))
-      return m as keyof typeof SYMBOLS_MAP;
+      return m;
   }
   return "acciones";
 }
 
 /** Copiado del diálogo, adaptado para Node */
-function isMarketOpenForMarket(market: string, now: Date): boolean {
+function isMarketOpenForMarket(market: Market, now: Date): boolean {
   const utc = new Date(now.toISOString());
   const day = utc.getUTCDay(); // 0=Domingo ... 6=Sábado
   const hour = utc.getUTCHours();
@@ -82,6 +86,44 @@ function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
+function buildInternalHeaders() {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (TRADE_ENGINE_INTERNAL_KEY) {
+    headers["x-trade-engine-key"] = TRADE_ENGINE_INTERNAL_KEY;
+  } else if (process.env.NODE_ENV !== "production") {
+    headers["x-trade-engine-key"] = "dev-local";
+  }
+  return headers;
+}
+
+function isQuoteArray(value: unknown): value is Quote[] {
+  return Array.isArray(value) && value.every((item) => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+
+    const maybeQuote = item as Partial<Quote>;
+    return typeof maybeQuote.symbol === "string" && typeof maybeQuote.price === "number";
+  });
+}
+
+function parseNumeric(value: string | number | null | undefined): number | null {
+  if (value == null) return null;
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasFinitePrice(price: number | undefined): price is number {
+  return typeof price === "number" && Number.isFinite(price);
+}
+
+function isTriggerRule(value: string | null): value is TriggerRule {
+  return value === "gte" || value === "lte";
+}
+
 /** Devuelve un Map SYMBOL -> price agregando datos de todos los mercados */
 async function fetchPrices(): Promise<Map<string, number>> {
   const map = new Map<string, number>();
@@ -97,9 +139,9 @@ async function fetchPrices(): Promise<Map<string, number>> {
           continue;
         }
         
-        const data: Quote[] = await res.json();
+        const data: unknown = await res.json();
         
-        if (!Array.isArray(data)) {
+        if (!isQuoteArray(data)) {
           console.warn(`⚠️ trade-engine: respuesta inválida para ${market}`);
           continue;
         }
@@ -132,10 +174,11 @@ async function fetchPrices(): Promise<Map<string, number>> {
 /* ========= Lógica: procesar pendientes ========= */
 
 async function processPendingTrades(priceMap: Map<string, number>, now: Date) {
+  const pendingStatus: TradeStatus = "pending";
   const pending = await db
     .select()
     .from(trades)
-    .where(eq(trades.status, "pending" as any));
+    .where(eq(trades.status, pendingStatus));
 
   if (!pending.length) return;
 
@@ -145,7 +188,7 @@ async function processPendingTrades(priceMap: Map<string, number>, now: Date) {
     try {
       const symbol = String(t.symbol).toUpperCase();
       const price = priceMap.get(symbol);
-      if (!price || !Number.isFinite(price)) continue;
+      if (!hasFinitePrice(price)) continue;
 
       // expiración
       if (t.expiresAt && new Date(t.expiresAt) < now) {
@@ -160,10 +203,10 @@ async function processPendingTrades(priceMap: Map<string, number>, now: Date) {
         continue;
       }
 
-      const trigger = Number(t.triggerPrice ?? 0);
-      const rule = String(t.triggerRule ?? "");
+      const trigger = parseNumeric(t.triggerPrice);
+      const rule = t.triggerRule;
 
-      if (!trigger || !rule) continue;
+      if (trigger == null || !isTriggerRule(rule)) continue;
 
       const gteOk = rule === "gte" && price >= trigger;
       const lteOk = rule === "lte" && price <= trigger;
@@ -177,10 +220,9 @@ async function processPendingTrades(priceMap: Map<string, number>, now: Date) {
 
       const res = await fetch(ACTIVATE_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildInternalHeaders(),
         body: JSON.stringify({
           tradeId: t.id,
-          currentPrice: price,
         }),
       });
 
@@ -201,10 +243,11 @@ async function processPendingTrades(priceMap: Map<string, number>, now: Date) {
 /* ========= Lógica: procesar abiertos (TP/SL) ========= */
 
 async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
+  const openStatus: TradeStatus = "open";
   const open = await db
     .select()
     .from(trades)
-    .where(eq(trades.status, "open" as any));
+    .where(eq(trades.status, openStatus));
 
   if (!open.length) return;
 
@@ -214,22 +257,22 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
     try {
       const symbol = String(t.symbol).toUpperCase();
       const price = priceMap.get(symbol);
-      if (!price || !Number.isFinite(price)) continue;
+      if (!hasFinitePrice(price)) continue;
 
       const market = marketOfSymbol(symbol);
       if (!isMarketOpenForMarket(market, now)) {
         continue;
       }
 
-      const side = t.side === "sell" ? "sell" : "buy";
-      const tp = t.takeProfit ? Number(t.takeProfit) : null;
-      const sl = t.stopLoss ? Number(t.stopLoss) : null;
+      const side = t.side;
+      const tp = parseNumeric(t.takeProfit);
+      const sl = parseNumeric(t.stopLoss);
 
       let shouldClose = false;
       let reason: "tp" | "sl" | null = null;
 
       // 1) Primero Stop Loss (prioridad a proteger)
-      if (sl && Number.isFinite(sl)) {
+      if (sl !== null) {
         if (
           (side === "buy" && price <= sl) ||
           (side === "sell" && price >= sl)
@@ -240,7 +283,7 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
       }
 
       // 2) Luego Take Profit (solo si no se activó SL)
-      if (!shouldClose && tp && Number.isFinite(tp)) {
+      if (!shouldClose && tp !== null) {
         if (
           (side === "buy" && price >= tp) ||
           (side === "sell" && price <= tp)
@@ -260,10 +303,9 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
 
       const res = await fetch(CLOSE_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildInternalHeaders(),
         body: JSON.stringify({
           tradeId: t.id,
-          closePrice: price,
         }),
       });
 

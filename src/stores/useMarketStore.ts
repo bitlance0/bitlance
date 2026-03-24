@@ -456,10 +456,6 @@ export const useMarketStore = create<MarketState>((set, get) => ({
         isLoading: false,
         marketMessage: e instanceof Error ? e.message : "Error cargando mercado",
       });
-    } finally {
-      if (version === get().requestVersion) {
-        set({ isLoading: false });
-      }
     }
   },
 
@@ -691,11 +687,5 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     );
 
     return typeof row?.price === "number" ? row.price : undefined;
-  },
-
-  /* ---------- cleanup ---------- */
-
-  cleanup: () => {
-    get().stopMarketStream();
   },
 }));

@@ -1,13 +1,69 @@
-import SYMBOLS_MAP from "@/lib/symbolsMap";
+import marketNavigationJson from "@/data/itick/market-navigation.json";
+import marketStructureJson from "@/data/itick/itick_market_structure.json";
 
-export function marketOfSymbol(sym: string | null): keyof typeof SYMBOLS_MAP | "acciones" {
-  if (!sym) return "acciones";
-  const symbol = sym.toUpperCase();
-  for (const [market, symbols] of Object.entries(SYMBOLS_MAP)) {
-    if (symbols.map((item) => item.toUpperCase()).includes(symbol)) {
-      return market as keyof typeof SYMBOLS_MAP;
+type MarketStructure = Record<string, Record<string, string[]>>;
+type NavigationData = {
+  marketAliases?: Record<string, string>;
+};
+
+const marketStructure = marketStructureJson as MarketStructure;
+const navigation = marketNavigationJson as NavigationData;
+const marketAliases = navigation.marketAliases ?? {};
+const symbolMarketIndex = buildSymbolMarketIndex();
+
+function normalizeSymbolCode(symbol: string) {
+  if (/^\d+\.0+$/.test(symbol)) {
+    return symbol.replace(/\.0+$/, "");
+  }
+  return symbol;
+}
+
+function normalizeMarket(raw: string | null | undefined) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return "";
+  if (value === "fx") return "forex";
+  if (value === "stock") return "acciones";
+  if (value === "future") return "commodities";
+  if (value === "fund" || value === "all") return "funds";
+  const canonical = marketAliases[value];
+  if (canonical && canonical !== value) {
+    return normalizeMarket(canonical);
+  }
+  return value;
+}
+
+function buildSymbolMarketIndex() {
+  const index = new Map<string, string>();
+
+  for (const [rawMarket, exchanges] of Object.entries(marketStructure)) {
+    const market = normalizeMarket(rawMarket);
+    if (!market) continue;
+
+    for (const symbols of Object.values(exchanges)) {
+      for (const symbolRaw of symbols) {
+        const symbol = normalizeSymbolCode(symbolRaw).toUpperCase();
+        if (!symbol || index.has(symbol)) continue;
+        index.set(symbol, market);
+      }
     }
   }
+
+  return index;
+}
+
+export function marketOfSymbol(sym: string | null): string {
+  if (!sym) return "acciones";
+  const symbol = normalizeSymbolCode(sym).toUpperCase();
+
+  const indexedMarket = symbolMarketIndex.get(symbol);
+  if (indexedMarket) return indexedMarket;
+
+  if (symbol.endsWith("USDT")) return "crypto";
+  if (/^[A-Z]{6}$/.test(symbol)) return "forex";
+  if (/^(MNQ|MES|NQ|ES|CL|GC|SI|HG|NG|ZC|ZS|ZW|YM|RTY)/.test(symbol)) {
+    return "commodities";
+  }
+
   return "acciones";
 }
 

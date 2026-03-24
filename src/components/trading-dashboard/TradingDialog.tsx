@@ -39,6 +39,9 @@ export interface TradingDialogProps {
   sellPrice?: number;
   buyPrice?: number;
   isMarketOpen?: boolean;
+  market?: string | null;
+  exchange?: string | null;
+  scope?: string | null;
 }
 
 type Mode = "market" | "pending";
@@ -115,6 +118,9 @@ export function TradingDialog({
   sellPrice: sellPriceProp,
   buyPrice: buyPriceProp,
   isMarketOpen: isMarketOpenProp,
+  market: marketProp,
+  exchange: exchangeProp,
+  scope: scopeProp,
 }: TradingDialogProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [imageExists, setImageExists] = useState(true);
@@ -450,35 +456,24 @@ export function TradingDialog({
 
     const hasTP = takeProfit.trim() !== "";
     const hasSL = stopLoss.trim() !== "";
-    const refreshedMid = symbol ? await refreshSymbolQuote(symbol) : undefined;
-    const effectiveMid =
-      typeof refreshedMid === "number" && Number.isFinite(refreshedMid) && refreshedMid > 0
-        ? refreshedMid
-        : liveMid;
-    const entryPriceForOrder =
-      Number.isFinite(effectiveMid) && effectiveMid > 0
-        ? Number(
-            (
-              operationType === "buy"
-                ? effectiveMid * (1 - spread)
-                : effectiveMid * (1 + spread)
-            ).toFixed(PRICE_DECIMALS)
-          )
-        : currentPrice;
+    if (symbol) {
+      await refreshSymbolQuote(symbol);
+    }
 
     try {
       const res = await fetch("/api/trade/open", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: user.id,
           symbol,
           side: operationType,
-          entryPrice: entryPriceForOrder,
           quantity: calculations.cantidad,
           leverage: 1,
           takeProfit: hasTP ? takeProfitNum : null,
           stopLoss: hasSL ? stopLossNum : null,
+          market: marketProp ?? market,
+          exchange: exchangeProp ?? null,
+          scope: scopeProp ?? null,
         }),
       });
       const data = await res.json();
@@ -512,7 +507,6 @@ export function TradingDialog({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: user.id,
           symbol,
           side: operationType,
           quantity: calculations.cantidad,
@@ -521,6 +515,9 @@ export function TradingDialog({
           triggerRule,
           takeProfit: hasTP ? takeProfitNum : null,
           stopLoss: hasSL ? stopLossNum : null,
+          market: marketProp ?? market,
+          exchange: exchangeProp ?? null,
+          scope: scopeProp ?? null,
         }),
       });
       const data = await res.json();
