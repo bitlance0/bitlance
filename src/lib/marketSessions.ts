@@ -1,5 +1,6 @@
 import marketNavigationJson from "@/data/itick/market-navigation.json";
 import marketStructureJson from "@/data/itick/itick_market_structure.json";
+import SYMBOLS_MAP from "@/lib/symbolsMap";
 
 type MarketStructure = Record<string, Record<string, string[]>>;
 type NavigationData = {
@@ -10,6 +11,7 @@ const marketStructure = marketStructureJson as MarketStructure;
 const navigation = marketNavigationJson as NavigationData;
 const marketAliases = navigation.marketAliases ?? {};
 const symbolMarketIndex = buildSymbolMarketIndex();
+const fallbackSymbolMarketIndex = buildFallbackSymbolMarketIndex();
 
 function normalizeSymbolCode(symbol: string) {
   if (/^\d+\.0+$/.test(symbol)) {
@@ -51,12 +53,37 @@ function buildSymbolMarketIndex() {
   return index;
 }
 
+function normalizeFallbackMarket(rawMarket: string) {
+  if (rawMarket === "fx") return "forex";
+  return normalizeMarket(rawMarket);
+}
+
+function buildFallbackSymbolMarketIndex() {
+  const index = new Map<string, string>();
+
+  for (const [rawMarket, symbols] of Object.entries(SYMBOLS_MAP)) {
+    const market = normalizeFallbackMarket(rawMarket);
+    if (!market) continue;
+
+    for (const symbolRaw of symbols) {
+      const symbol = normalizeSymbolCode(symbolRaw).toUpperCase();
+      if (!symbol || index.has(symbol)) continue;
+      index.set(symbol, market);
+    }
+  }
+
+  return index;
+}
+
 export function marketOfSymbol(sym: string | null): string {
   if (!sym) return "acciones";
   const symbol = normalizeSymbolCode(sym).toUpperCase();
 
   const indexedMarket = symbolMarketIndex.get(symbol);
   if (indexedMarket) return indexedMarket;
+
+  const fallbackMarket = fallbackSymbolMarketIndex.get(symbol);
+  if (fallbackMarket) return fallbackMarket;
 
   if (symbol.endsWith("USDT")) return "crypto";
   if (/^[A-Z]{6}$/.test(symbol)) return "forex";

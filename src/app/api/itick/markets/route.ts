@@ -390,6 +390,7 @@ export async function GET(req: Request) {
     const limitParam = searchParams.get("limit");
     const preferredSymbolParam = searchParams.get("symbol");
     const preferredSymbol = preferredSymbolParam?.trim().toUpperCase() ?? null;
+    const bypassCache = searchParams.get("fresh") === "1";
 
     const requestedLimit = Number(limitParam ?? String(DEFAULT_LIMIT));
     const limit =
@@ -449,42 +450,44 @@ export async function GET(req: Request) {
       preferredSymbol,
     });
 
-    const cached = await getItickCache(cacheKey);
-    if (cached) {
-      const cacheAgeMs = Date.now() - cached.last_update;
+    if (!bypassCache) {
+      const cached = await getItickCache(cacheKey);
+      if (cached) {
+        const cacheAgeMs = Date.now() - cached.last_update;
 
-      if (cacheAgeMs <= ITICK_CACHE_WINDOW_MS) {
-        if (cached.no_market_data) {
-          return NextResponse.json(
-            {
-              no_market_data: true,
-              message: cached.message ?? NO_MARKET_DATA_MESSAGE,
-              last_update: cached.last_update,
-              data: [],
-            },
-            {
-              status: 200,
-              headers: {
-                "X-Cache": "HIT",
-                "X-Cache-Age-Ms": String(cacheAgeMs),
-                "X-Last-Update": new Date(cached.last_update).toISOString(),
-                "X-Market-Data-Empty": "true",
+        if (cacheAgeMs <= ITICK_CACHE_WINDOW_MS) {
+          if (cached.no_market_data) {
+            return NextResponse.json(
+              {
+                no_market_data: true,
+                message: cached.message ?? NO_MARKET_DATA_MESSAGE,
+                last_update: cached.last_update,
+                data: [],
               },
-            }
-          );
+              {
+                status: 200,
+                headers: {
+                  "X-Cache": "HIT",
+                  "X-Cache-Age-Ms": String(cacheAgeMs),
+                  "X-Last-Update": new Date(cached.last_update).toISOString(),
+                  "X-Market-Data-Empty": "true",
+                },
+              }
+            );
+          }
+
+          return NextResponse.json(cached.data, {
+            status: 200,
+            headers: {
+              "X-Cache": "HIT",
+              "X-Cache-Age-Ms": String(cacheAgeMs),
+              "X-Last-Update": new Date(cached.last_update).toISOString(),
+            },
+          });
         }
 
-        return NextResponse.json(cached.data, {
-          status: 200,
-          headers: {
-            "X-Cache": "HIT",
-            "X-Cache-Age-Ms": String(cacheAgeMs),
-            "X-Last-Update": new Date(cached.last_update).toISOString(),
-          },
-        });
+        await clearItickCache(cacheKey);
       }
-
-      await clearItickCache(cacheKey);
     }
 
     const baseUrl = process.env.ITICK_API_URL;

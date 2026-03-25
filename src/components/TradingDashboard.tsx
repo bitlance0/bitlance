@@ -28,6 +28,16 @@ const TradingDashboardMobile = dynamic(
   { ssr: false }
 );
 
+function isHandledMarketAvailabilityError(message: string) {
+  const normalized = String(message ?? "").toLowerCase();
+  return (
+    normalized.includes("tu paquete itick no soporta esta región/mercado") ||
+    normalized.includes("tu paquete itick no soporta esta region/mercado") ||
+    normalized.includes("límite de solicitudes de itick alcanzado") ||
+    normalized.includes("limite de solicitudes de itick alcanzado")
+  );
+}
+
 export default function TradingDashboard() {
   const [isMobile, setIsMobile] = useState(false);
   const availableMarkets = useMemo(() => getAvailableDashboardMarkets(), []);
@@ -233,6 +243,11 @@ export default function TradingDashboard() {
             payload && typeof payload === "object" && "error" in payload
               ? String((payload as { error?: string }).error)
               : `HTTP ${res.status}`;
+          if (isHandledMarketAvailabilityError(detail)) {
+            setDataMarket([]);
+            setMarketMessage(detail);
+            return;
+          }
           throw new Error(detail);
         }
 
@@ -284,6 +299,15 @@ export default function TradingDashboard() {
         setDataMarket([]);
         setMarketMessage("Respuesta no valida del proveedor iTICK");
       } catch (error) {
+        if (
+          error instanceof Error &&
+          isHandledMarketAvailabilityError(error.message)
+        ) {
+          setDataMarket([]);
+          setMarketMessage(error.message);
+          return;
+        }
+
         console.error("Failed to load market data:", error);
         setDataMarket([]);
         setMarketMessage(

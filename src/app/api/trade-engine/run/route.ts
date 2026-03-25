@@ -1,7 +1,4 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { user } from "@/db/schema";
 import { runTradeEngineOnce } from "@/lib/tradeEngineRunner";
 import { getActor } from "@/modules/auth/services/getActor";
 
@@ -13,31 +10,20 @@ function isInternalRequest(req: Request) {
   return false;
 }
 
-async function isPrivilegedActor(actorId: string) {
-  const [row] = await db
-    .select({ role: user.role })
-    .from(user)
-    .where(eq(user.id, actorId));
-
-  return row?.role === "admin";
-}
-
 async function run(req: Request) {
   const internal = isInternalRequest(req);
 
-  if (!internal) {
-    const actor = await getActor(req);
-    if (!actor?.user?.id) {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-
-    const privileged = await isPrivilegedActor(actor.user.id);
-    if (!privileged) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 403 });
-    }
+  if (internal) {
+    const result = await runTradeEngineOnce();
+    return NextResponse.json(result);
   }
 
-  const result = await runTradeEngineOnce();
+  const actor = await getActor(req);
+  if (!actor?.user?.id) {
+    return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+  }
+
+  const result = await runTradeEngineOnce({ userId: actor.user.id });
   return NextResponse.json(result);
 }
 

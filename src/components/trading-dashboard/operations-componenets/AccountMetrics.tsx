@@ -18,7 +18,9 @@ export function AccountMetrics({
             className={`text-sm md:text-base font-medium ${Number(item.value) < 0 ? "text-red-400" : "text-[var(--color-text)]"}`}
           >
             {item.label != 'Nvl margen (%)'
-              ? formatCurrency(Number(item.value), "en-US", currency)
+              ? formatCurrency(Number(item.value), "en-US", currency, {
+                  compactSmallValues: item.label === "P/L abiertas",
+                })
               : `${item.value.toFixed(2)} %`
             }
           </p>

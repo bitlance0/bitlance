@@ -609,7 +609,7 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     const scope = resolveScopeByContext({
       market,
       exchange,
-      selectedScope: context?.scope ?? state.selectedScope ?? null,
+      selectedScope: context?.scope ?? null,
       favoriteScope: favoriteContext?.scope ?? null,
     });
     const canonicalMarket = toCanonicalMarket(toDashboardMarket(market));
@@ -621,6 +621,7 @@ export const useMarketStore = create<MarketState>((set, get) => ({
         exchange,
         limit: "1",
         symbol: normalizedSymbol,
+        fresh: "1",
       });
 
       const response = await fetch(`/api/itick/markets?${query.toString()}`, {

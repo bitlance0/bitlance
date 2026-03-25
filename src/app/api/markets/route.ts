@@ -38,10 +38,14 @@ const ITICK_API_URL = process.env.ITICK_API_URL!;
 const CACHE_TTL_SEC = 300;
 const CACHE_TTL_MS = CACHE_TTL_SEC * 1000;
 const REAL_WINDOW_MS = 15_000;
+const REDIS_RETRY_COOLDOWN_MS = 60_000;
+const REDIS_WARN_COOLDOWN_MS = 60_000;
 
 /* ===================== Redis / Memory ===================== */
 
 let redis: Redis | null = null;
+let redisDisabledUntil = 0;
+let lastRedisWarnAt = 0;
 
 if (
   process.env.UPSTASH_REDIS_REST_URL &&
@@ -77,6 +81,58 @@ function isFresh(wrapper: CacheWrapper, isRealData = false) {
   return Date.now() - wrapper.ts < threshold;
 }
 
+function getErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "";
+
+  const candidate = error as {
+    code?: unknown;
+    cause?: { code?: unknown } | null;
+  };
+
+  if (typeof candidate.code === "string") return candidate.code;
+  if (candidate.cause && typeof candidate.cause.code === "string") {
+    return candidate.cause.code;
+  }
+
+  return "";
+}
+
+function isRedisUnavailable(error: unknown) {
+  const code = getErrorCode(error);
+  return ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(code);
+}
+
+function canUseRedis() {
+  return Boolean(redis) && Date.now() >= redisDisabledUntil;
+}
+
+function handleRedisError(operation: "get" | "set", error: unknown) {
+  const now = Date.now();
+  const unavailable = isRedisUnavailable(error);
+
+  if (unavailable) {
+    redisDisabledUntil = now + REDIS_RETRY_COOLDOWN_MS;
+  }
+
+  if (now - lastRedisWarnAt < REDIS_WARN_COOLDOWN_MS) {
+    return;
+  }
+
+  lastRedisWarnAt = now;
+
+  if (unavailable) {
+    console.warn(
+      `[/api/markets] Redis ${operation} unavailable, using memory cache for ${Math.round(
+        REDIS_RETRY_COOLDOWN_MS / 1000
+      )}s:`,
+      error
+    );
+    return;
+  }
+
+  console.warn(`[/api/markets] Redis ${operation} error, falling back to memory:`, error);
+}
+
 async function safeJson(res: Response) {
   try {
     return await res.json();
@@ -105,9 +161,12 @@ function isValidCacheWrapper(value: unknown): value is CacheWrapper {
 }
 
 async function getCache(key: string): Promise<CacheWrapper | null> {
-  if (redis) {
+  if (canUseRedis()) {
+    const redisClient = redis;
+    if (!redisClient) return null;
+
     try {
-      const raw = await redis.get(key);
+      const raw = await redisClient.get(key);
       if (!raw) {
         return null;
       }
@@ -118,14 +177,13 @@ async function getCache(key: string): Promise<CacheWrapper | null> {
           : (raw as unknown);
 
       if (!isValidCacheWrapper(parsed)) {
-        await redis.del(key).catch(() => {});
+        await redisClient.del(key).catch(() => {});
         return null;
       }
 
       return parsed;
     } catch (e) {
-      console.warn("⚠️ Redis error in getCache, falling back to memory:", e);
-      // Continuar a fallback local
+      handleRedisError("get", e);
     }
   }
 
@@ -164,14 +222,17 @@ async function setCache(
   memoryCache.set(key, wrapper);
 
   // Intentar guardar en Redis
-  if (redis) {
+  if (canUseRedis()) {
+    const redisClient = redis;
+    if (!redisClient) return;
+
     try {
-      await redis.set(key, JSON.stringify(wrapper), {
+      await redisClient.set(key, JSON.stringify(wrapper), {
         ex: CACHE_TTL_SEC,
       });
       return;
     } catch (e) {
-      console.warn("⚠️ Redis set error, using memory cache:", e);
+      handleRedisError("set", e);
     }
   }
 }
