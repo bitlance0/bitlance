@@ -5,21 +5,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MarketQuote } from "@/types/interfaces";
 import { useMarketStore } from "@/stores/useMarketStore";
 import { TradingDialog } from "./TradingDialog";
-import SYMBOLS_MAP from "@/lib/symbolsMap";
+import { useConfirm } from "@/components/common/ConfirmDialog";
 
-/** Mapea símbolo -> market para definir spreads / horarios */
-function marketOfSymbol(sym: string): keyof typeof SYMBOLS_MAP | "acciones" {
-  const S = sym.toUpperCase();
-  for (const [m, arr] of Object.entries(SYMBOLS_MAP)) {
-    if (arr.map((x) => x.toUpperCase()).includes(S)) return m as keyof typeof SYMBOLS_MAP;
-  }
+function normalizeMarket(value: string | null | undefined) {
+  const market = String(value ?? "").trim().toLowerCase();
+  if (!market) return "";
+  if (market === "fx") return "forex";
+  if (market === "stock") return "acciones";
+  if (market === "future") return "commodities";
+  if (market === "fund" || market === "all") return "funds";
+  return market;
+}
+
+function inferMarketFromSymbol(symbol: string) {
+  const upper = symbol.toUpperCase();
+  if (upper.endsWith("USDT")) return "crypto";
+  if (/^[A-Z]{6}$/.test(upper)) return "forex";
   return "acciones";
 }
 
-/** Misma lógica de horarios que usamos en TradingDialog / trade-engine */
 function isMarketOpenForMarket(market: string, now: Date): boolean {
   const utc = new Date(now.toISOString());
-  const day = utc.getUTCDay(); // 0=Domingo ... 6=Sábado
+  const day = utc.getUTCDay();
   const hour = utc.getUTCHours();
   const minute = utc.getUTCMinutes();
   const timeMinutes = hour * 60 + minute;
@@ -30,16 +37,15 @@ function isMarketOpenForMarket(market: string, now: Date): boolean {
     return timeMinutes >= start && timeMinutes <= end;
   };
 
-  if (market === "crypto") return true; // 24/7
+  if (market === "crypto") return true;
 
-  if (market === "fx") {
+  if (market === "fx" || market === "forex") {
     if (day === 0 || day === 6) return false;
-    return true; // simplificado: 24h L–V
+    return true;
   }
 
   if (["indices", "acciones", "commodities"].includes(market)) {
     if (day === 0 || day === 6) return false;
-    // Sesión NY aprox 14:30–21:00 UTC
     return inRange(14, 30, 21, 0);
   }
 
@@ -49,6 +55,9 @@ function isMarketOpenForMarket(market: string, now: Date): boolean {
 
 export default function SymbolRow({
   symbol,
+  market: rowMarket,
+  source,
+  isFavorite,
   price,
   high,
   low,
@@ -57,12 +66,22 @@ export default function SymbolRow({
   changePercent,
   latestTradingDay,
 }: MarketQuote) {
-  const { setSelectedSymbol } = useMarketStore();
-  const market = useMemo(() => marketOfSymbol(symbol), [symbol]);
+  const { selectedSymbol, setSelectedSymbol, toggleFavoriteSymbol, refreshSymbolQuote } =
+    useMarketStore();
+  const confirm = useConfirm();
+
+  const symbolMarket = useMemo(
+    () => normalizeMarket(rowMarket) || inferMarketFromSymbol(symbol),
+    [rowMarket, symbol]
+  );
+  const isSelected = useMemo(
+    () => selectedSymbol?.toUpperCase() === symbol.toUpperCase(),
+    [selectedSymbol, symbol]
+  );
 
   const isMarketOpen = useMemo(
-    () => isMarketOpenForMarket(market, new Date()),
-    [market]
+    () => isMarketOpenForMarket(symbolMarket, new Date()),
+    [symbolMarket]
   );
 
   const [displayPrice, setDisplayPrice] = useState<number>(price ?? 0);
@@ -79,15 +98,17 @@ export default function SymbolRow({
   const spreadPctByMarket: Record<string, number> = useMemo(
     () => ({
       fx: 0.0001,
+      forex: 0.0001,
       crypto: 0.0008,
       acciones: 0.0002,
       indices: 0.0003,
       commodities: 0.0004,
+      funds: 0.0002,
     }),
     []
   );
 
-  const spread = spreadPctByMarket[market] ?? 0.0005;
+  const spread = spreadPctByMarket[symbolMarket] ?? 0.0005;
   const targetSell = useMemo(
     () => Number((live * (1 + spread)).toFixed(2)),
     [live, spread]
@@ -97,19 +118,26 @@ export default function SymbolRow({
     [live, spread]
   );
   const targetChange = change ?? 0;
+  const targetChangePct =
+    typeof changePercent === "number" && Number.isFinite(changePercent)
+      ? changePercent
+      : null;
 
   const [sellPrice, setSellPrice] = useState(targetSell);
   const [buyPrice, setBuyPrice] = useState(targetBuy);
   const [changeValue, setChangeValue] = useState(Math.abs(targetChange));
   const [sellColor, setSellColor] = useState("#b8b5b5");
   const [buyColor, setBuyColor] = useState("#b8b5b5");
-  const [changeColor, setChangeColor] = useState("#16a34a");
+  const [changeColor, setChangeColor] = useState(
+    targetChange < 0 ? "#db3535" : targetChange > 0 ? "#16a34a" : "#b8b5b5"
+  );
   const [isNegative, setIsNegative] = useState(targetChange < 0);
   const prevSellRef = useRef(sellPrice);
   const prevBuyRef = useRef(buyPrice);
   const prevChangeRef = useRef(targetChange);
 
-  const short = (v?: number) => (v !== undefined ? v.toFixed(2) : "-");
+  const short = (value?: number) =>
+    value !== undefined && Number.isFinite(value) ? value.toFixed(2) : "-";
 
   useEffect(() => {
     if (!isMarketOpen) return;
@@ -143,6 +171,7 @@ export default function SymbolRow({
 
     if (newChange > prevChange) setChangeColor("#16a34a");
     else if (newChange < prevChange) setChangeColor("#db3535");
+    else if (newChange === 0) setChangeColor("#b8b5b5");
 
     setIsNegative(newChange < 0);
     setChangeValue(Math.abs(newChange));
@@ -150,38 +179,101 @@ export default function SymbolRow({
     prevChangeRef.current = newChange;
   }, [targetChange, isMarketOpen]);
 
+  const changeText = useMemo(() => {
+    const signIcon = isNegative ? "▼" : "▲";
+    const base = `${signIcon} ${changeValue.toFixed(2)}`;
+    if (targetChangePct === null) return base;
+    return `${base} (${Math.abs(targetChangePct).toFixed(2)}%)`;
+  }, [changeValue, isNegative, targetChangePct]);
+
   return (
     <div className="px-1 pt-2">
       <div
-        onClick={() => setSelectedSymbol(symbol)}
-        className="
-          grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 p-2
-          rounded-xl border border-[var(--color-border)]
-          bg-[var(--color-surface-alt)]
-          hover:bg-[var(--color-surface)]
-          transition-colors cursor-pointer
-        "
+        onClick={() => {
+          setSelectedSymbol(symbol);
+          void refreshSymbolQuote(symbol, {
+            market: rowMarket ?? symbolMarket,
+            exchange: typeof source === "string" ? source : null,
+          });
+        }}
+        className={`
+          grid grid-cols-[minmax(0,1fr)_minmax(74px,86px)_minmax(74px,86px)] items-center gap-2 p-2
+          rounded-xl border transition-colors cursor-pointer
+          ${
+            isSelected
+              ? "border-yellow-500/70 bg-yellow-500/10 shadow-[0_0_0_1px_rgba(234,179,8,0.35)]"
+              : "border-[var(--color-border)] bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface)]"
+          }
+        `}
       >
-        {/* Columna 1: símbolo */}
-        <div className="flex items-center gap-2 leading-tight p-1">
-          <span
-            className={`
-              inline-block w-2 h-2 rounded-full
-              ${isMarketOpen ? "bg-emerald-400" : "bg-zinc-500"}
-            `}
-            title={isMarketOpen ? "Mercado abierto" : "Mercado cerrado"}
-          />
-          <span className="text-sm font-semibold text-[var(--color-text)]">
-            {symbol}
-          </span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onMouseDown={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={async (event) => {
+                event.stopPropagation();
+                const shouldMark = !Boolean(isFavorite);
+
+                const ok = await confirm({
+                  title: shouldMark
+                    ? `Marcar ${symbol} como favorita?`
+                    : `Desmarcar ${symbol} de favoritas?`,
+                  description: shouldMark
+                    ? "Este simbolo se agregara al listado de favoritas."
+                    : "Este simbolo se quitara del listado de favoritas.",
+                  confirmText: shouldMark ? "Marcar favorita" : "Desmarcar favorita",
+                  cancelText: "Cancelar",
+                  confirmClassName: shouldMark
+                    ? "border border-yellow-500/70 bg-transparent text-yellow-300 hover:bg-yellow-500/10"
+                    : undefined,
+                  destructive: !shouldMark,
+                });
+
+                if (!ok) return;
+                toggleFavoriteSymbol(symbol, {
+                  market: rowMarket ?? symbolMarket,
+                  exchange: typeof source === "string" ? source : null,
+                  scope: null,
+                });
+              }}
+              title={isFavorite ? "Desmarcar favorita" : "Marcar favorita"}
+              aria-label={isFavorite ? "Desmarcar favorita" : "Marcar favorita"}
+              className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors ${
+                isFavorite
+                  ? "border-yellow-500/80 text-yellow-300 hover:bg-yellow-500/10"
+                  : "border-zinc-500/70 text-zinc-400 hover:bg-zinc-500/10"
+              }`}
+            >
+              ★
+            </button>
+
+            <span className="truncate text-sm font-semibold text-[var(--color-text)]">
+              {symbol}
+            </span>
+
+            <span
+              className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                isMarketOpen ? "bg-emerald-400" : "bg-red-500"
+              }`}
+              title={isMarketOpen ? "Mercado abierto" : "Mercado cerrado"}
+            />
+          </div>
+
+          <div
+            className="pl-8 pt-0.5 text-[11px] font-semibold leading-none sm:text-xs"
+            style={{ color: changeColor }}
+          >
+            {changeText}
+          </div>
         </div>
 
-        {/* Columna 2: SELL (Comprar para el usuario) */}
         <div
-          className="rounded-md transition-colors duration-300"
+          className="w-full rounded-md border border-emerald-500/20 transition-colors duration-300"
           style={{
             backgroundColor:
-              sellColor === "#b8b5b5" ? "transparent" : sellColor + "20",
+              sellColor === "#b8b5b5" ? "transparent" : `${sellColor}20`,
           }}
         >
           <TradingDialog
@@ -192,23 +284,17 @@ export default function SymbolRow({
             sellPrice={sellPrice}
             buyPrice={buyPrice}
             isMarketOpen={isMarketOpen}
+            market={rowMarket ?? symbolMarket}
+            exchange={typeof source === "string" ? source : null}
+            scope={null}
           />
         </div>
 
-        {/* Columna 3: cambio */}
         <div
-          className="min-w-[35px] text-center text-[13px] font-semibold transition-colors duration-300"
-          style={{ color: changeColor }}
-        >
-          {isNegative ? "▼" : "▲"} {changeValue.toFixed(2)}
-        </div>
-
-        {/* Columna 4: BUY (Vender para el usuario) */}
-        <div
-          className="rounded-md transition-colors duration-300"
+          className="w-full rounded-md border border-red-500/20 transition-colors duration-300"
           style={{
             backgroundColor:
-              buyColor === "#b8b5b5" ? "transparent" : buyColor + "20",
+              buyColor === "#b8b5b5" ? "transparent" : `${buyColor}20`,
           }}
         >
           <TradingDialog
@@ -219,6 +305,9 @@ export default function SymbolRow({
             sellPrice={sellPrice}
             buyPrice={buyPrice}
             isMarketOpen={isMarketOpen}
+            market={rowMarket ?? symbolMarket}
+            exchange={typeof source === "string" ? source : null}
+            scope={null}
           />
         </div>
       </div>

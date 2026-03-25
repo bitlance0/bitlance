@@ -18,6 +18,7 @@ type Quote = {
   latestTradingDay?: string;
   market?: string;
   source?: DataSource;
+  // grouped?: Record<string, Record<string, string[]>>;
 };
 
 type CacheWrapper = {
@@ -31,14 +32,20 @@ type CacheWrapper = {
 const API_KEY = process.env.ALPHA_VANTAGE_API_KEY!;
 const ALPHA_RPM = Number(process.env.ALPHA_RPM ?? 500);
 const REQUEST_INTERVAL_MS = Math.ceil(60_000 / ALPHA_RPM);
+const ITICK_API_KEY = process.env.ITICK_API_KEY!;
+const ITICK_API_URL = process.env.ITICK_API_URL!;
 
 const CACHE_TTL_SEC = 300;
 const CACHE_TTL_MS = CACHE_TTL_SEC * 1000;
 const REAL_WINDOW_MS = 15_000;
+const REDIS_RETRY_COOLDOWN_MS = 60_000;
+const REDIS_WARN_COOLDOWN_MS = 60_000;
 
 /* ===================== Redis / Memory ===================== */
 
 let redis: Redis | null = null;
+let redisDisabledUntil = 0;
+let lastRedisWarnAt = 0;
 
 if (
   process.env.UPSTASH_REDIS_REST_URL &&
@@ -67,8 +74,63 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function isFresh(wrapper: CacheWrapper) {
-  return Date.now() - wrapper.ts < REAL_WINDOW_MS;
+function isFresh(wrapper: CacheWrapper, isRealData = false) {
+  // Datos reales: frescos por 5 minutos
+  // Datos simulados: frescos por 15 segundos
+  const threshold = isRealData ? CACHE_TTL_MS : REAL_WINDOW_MS;
+  return Date.now() - wrapper.ts < threshold;
+}
+
+function getErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "";
+
+  const candidate = error as {
+    code?: unknown;
+    cause?: { code?: unknown } | null;
+  };
+
+  if (typeof candidate.code === "string") return candidate.code;
+  if (candidate.cause && typeof candidate.cause.code === "string") {
+    return candidate.cause.code;
+  }
+
+  return "";
+}
+
+function isRedisUnavailable(error: unknown) {
+  const code = getErrorCode(error);
+  return ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(code);
+}
+
+function canUseRedis() {
+  return Boolean(redis) && Date.now() >= redisDisabledUntil;
+}
+
+function handleRedisError(operation: "get" | "set", error: unknown) {
+  const now = Date.now();
+  const unavailable = isRedisUnavailable(error);
+
+  if (unavailable) {
+    redisDisabledUntil = now + REDIS_RETRY_COOLDOWN_MS;
+  }
+
+  if (now - lastRedisWarnAt < REDIS_WARN_COOLDOWN_MS) {
+    return;
+  }
+
+  lastRedisWarnAt = now;
+
+  if (unavailable) {
+    console.warn(
+      `[/api/markets] Redis ${operation} unavailable, using memory cache for ${Math.round(
+        REDIS_RETRY_COOLDOWN_MS / 1000
+      )}s:`,
+      error
+    );
+    return;
+  }
+
+  console.warn(`[/api/markets] Redis ${operation} error, falling back to memory:`, error);
 }
 
 async function safeJson(res: Response) {
@@ -81,20 +143,57 @@ async function safeJson(res: Response) {
 
 /* ===================== Cache helpers ===================== */
 
+function isValidCacheWrapper(value: unknown): value is CacheWrapper {
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as CacheWrapper;
+  if (!Number.isFinite(candidate.ts)) return false;
+  if (!Array.isArray(candidate.data)) return false;
+
+  return candidate.data.every((q) => {
+    if (!q || typeof q !== "object") return false;
+    const quote = q as Quote;
+    return (
+      typeof quote.symbol === "string" &&
+      Number.isFinite(quote.price)
+    );
+  });
+}
+
 async function getCache(key: string): Promise<CacheWrapper | null> {
-  if (redis) {
+  if (canUseRedis()) {
+    const redisClient = redis;
+    if (!redisClient) return null;
+
     try {
-      const raw = await redis.get(key);
-      if (raw) {
-        return typeof raw === "string"
-          ? (JSON.parse(raw) as CacheWrapper)
-          : (raw as CacheWrapper);
+      const raw = await redisClient.get(key);
+      if (!raw) {
+        return null;
       }
-    } catch {}
+
+      const parsed =
+        typeof raw === "string"
+          ? (JSON.parse(raw) as unknown)
+          : (raw as unknown);
+
+      if (!isValidCacheWrapper(parsed)) {
+        await redisClient.del(key).catch(() => {});
+        return null;
+      }
+
+      return parsed;
+    } catch (e) {
+      handleRedisError("get", e);
+    }
   }
 
   const local = memoryCache.get(key);
   if (!local) return null;
+
+  if (!isValidCacheWrapper(local)) {
+    memoryCache.delete(key);
+    return null;
+  }
 
   if (Date.now() - local.ts > CACHE_TTL_MS) {
     memoryCache.delete(key);
@@ -119,58 +218,27 @@ async function setCache(
       : prev?.anchorTs,
   };
 
-  if (redis) {
+  // Guardar en memoria local SIEMPRE (fallback)
+  memoryCache.set(key, wrapper);
+
+  // Intentar guardar en Redis
+  if (canUseRedis()) {
+    const redisClient = redis;
+    if (!redisClient) return;
+
     try {
-      await redis.set(key, JSON.stringify(wrapper), {
+      await redisClient.set(key, JSON.stringify(wrapper), {
         ex: CACHE_TTL_SEC,
       });
       return;
-    } catch {}
-    
-  }
-
-  memoryCache.set(key, wrapper);
-}
-
-/* ===================== Alpha Vantage ===================== */
-
-async function fetchCrypto(symbol: string): Promise<Quote> {
-  if (!alphaAvailable()) {
-    throw new Error("alpha_blocked");
-  }
-
-  const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${symbol}&to_currency=USD&apikey=${API_KEY}`;
-  const res = await fetch(url);
-  const json = await safeJson(res);
-
-  if (
-    !res.ok ||
-    !json ||
-    json["Error Message"] ||
-    json.Note
-  ) {
-    if (json?.Note) {
-      alphaBlockedUntil = Date.now() + 60_000;
-      throw new Error("rate_limited");
+    } catch (e) {
+      handleRedisError("set", e);
     }
-    throw new Error("alpha_failed");
   }
-
-  const rate = json["Realtime Currency Exchange Rate"];
-  const price = parseFloat(rate["5. Exchange Rate"]);
-
-  if (!Number.isFinite(price)) {
-    throw new Error("invalid_price");
-  }
-
-  return {
-    symbol,
-    price,
-    latestTradingDay: rate["6. Last Refreshed"],
-    source: "real",
-    market: "crypto",
-  };
 }
+
+/* ===================== Alpha Vantage (deprecated - usar /api/alpha-markets) ===================== */
+// La función fetchCrypto está deprecada. Usar /api/alpha-markets en lugar de esto.
 
 /* ===================== Simulation ===================== */
 
@@ -275,82 +343,185 @@ function getBaseMock(
 
 /* ===================== Fetch Market ===================== */
 
-async function fetchMarket(market: string): Promise<Quote[]> {
+/**
+ * Obtiene datos REALES de mercado desde /api/alpha-markets
+ * Si falla por rate limit o timeout, retorna mock como fallback
+ */
+async function fetchMarketDataReal(market: string): Promise<Quote[]> {
   const symbols = SYMBOLS_MAP[market] ?? [];
-  const results: Quote[] = [];
-
-  for (const s of symbols) {
-    const q = await fetchCrypto(s);
-    results.push(q);
-    await sleep(REQUEST_INTERVAL_MS);
+  
+  if (!symbols.length) {
+    throw new Error(`Invalid market: ${market}`);
   }
 
-  return results;
+  try {
+    // Intentar obtener datos reales desde /api/alpha-markets
+    console.log(`[/api/markets] Intentando obtener datos REALES para ${market}...`);
+    
+    // Detectar puerto actual en desarrollo
+    const port = process.env.PORT || "3000";
+    const baseUrl = process.env.NODE_ENV === "production" 
+      ? (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000")
+      : `http://localhost:${port}`;
+    
+    const url = `${baseUrl}/api/alpha-markets?market=${market}`;
+    
+    const res = await fetch(url, { 
+      cache: "no-store",
+      signal: AbortSignal.timeout(25000) // 25s timeout
+    });
+    
+    if (!res.ok) {
+      throw new Error(`Alpha markets returned ${res.status}`);
+    }
+    
+    const data = await res.json();
+    
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error("Invalid or empty response from alpha-markets");
+    }
+    
+    console.log(`✅ [/api/markets] Datos REALES obtenidos para ${market}: ${data.length} símbolos`);
+    return data.map(q => ({ ...q, source: "real" as DataSource }));
+    
+  } catch (error) {
+    console.warn(`⚠️ [/api/markets] No se pudieron obtener datos REALES para ${market}:`, error);
+    console.log(`[/api/markets] Usando MOCK como fallback para ${market}`);
+    
+    // Fallback a mock
+    return getBaseMock(market, symbols);
+  }
 }
 
 /* ===================== Handler ===================== */
 
 export async function GET(req: Request) {
-  const market =
-    new URL(req.url).searchParams.get("market") ?? "crypto";
-  const key = `market-${market}`;
-
-  const cached = await getCache(key);
-
-  // 1️⃣ Cache
-  if (cached) {
-    return NextResponse.json(
-      isFresh(cached)
-        ? cached.data
-        : simulate(cached),
-      { status: 200 }
-    );
-  }
-
-  // 2️⃣ Inflight
-  if (inflight.has(key)) {
-    await inflight.get(key);
-    const again = await getCache(key);
-    if (again) {
-      return NextResponse.json(
-        isFresh(again)
-          ? again.data
-          : simulate(again),
-        { status: 200 }
-      );
-    }
-  }
-
-  // 3️⃣ Fetch real
-  const p = (async () => {
-    const data = await fetchMarket(market);
-    await setCache(key, data, true);
-    return data;
-  })();
-
-  inflight.set(key, p);
-
   try {
-    const data = await p;
-    return NextResponse.json(data, { status: 200 });
-  } catch {
-    let fallback: Quote[];
+    const url = new URL(req.url);
+    const marketParam = url.searchParams.get("market") ?? "crypto";
+    const market = marketParam.toLowerCase();
 
-    if (cached) {
-      const c = cached as CacheWrapper;
-      fallback = c.anchorTs
-        ? deriveMock(c, market)
-        : simulate(c);
-    } else {
-      fallback = getBaseMock(
-        market,
-        SYMBOLS_MAP[market] ?? []
+    // Validación temprana del market
+    if (!(market in SYMBOLS_MAP)) {
+      console.warn(`[/api/markets] Invalid market: ${market}`);
+      return NextResponse.json(
+        {
+          error: "invalid_market",
+          message: `Market must be one of: ${Object.keys(SYMBOLS_MAP).join(", ")}`,
+        },
+        { status: 400 }
       );
     }
 
-    await setCache(key, fallback);
-    return NextResponse.json(fallback, { status: 200 });
-  } finally {
-    inflight.delete(key);
+    const key = `market-${market}`;
+    const cached = await getCache(key);
+
+    // 1️⃣ Retornar caché válida inmediatamente
+    if (cached) {
+      // Si los datos son reales y frescos, retornar tal cual
+      const hasRealData = cached.data[0]?.source === "real";
+      const fresh = isFresh(cached, hasRealData);
+      const shouldSimulate = !hasRealData && !fresh;
+      
+      const response = shouldSimulate ? simulate(cached) : cached.data;
+      
+      console.log(`[/api/markets] Retornando desde caché: ${market}, real=${hasRealData}, fresh=${fresh}, simulated=${shouldSimulate}`);
+      
+      return NextResponse.json(response, { 
+        status: 200,
+        headers: {
+          'X-Data-Source': hasRealData ? 'cache-real' : 'cache-simulated',
+          'X-Cache-Age': String(Date.now() - cached.ts)
+        }
+      });
+    }
+
+    // 2️⃣ Si hay request inflight, esperarlo
+    if (inflight.has(key)) {
+      try {
+        await inflight.get(key);
+        const again = await getCache(key);
+        if (again) {
+          const hasRealData = again.data[0]?.source === "real";
+          const fresh = isFresh(again, hasRealData);
+          const shouldSimulate = !hasRealData && !fresh;
+          
+          return NextResponse.json(
+            shouldSimulate ? simulate(again) : again.data,
+            { 
+              status: 200,
+              headers: {
+                'X-Data-Source': hasRealData ? 'inflight-real' : 'inflight-simulated'
+              }
+            }
+          );
+        }
+        // Si el inflight no guardó caché, continuar con fallback
+      } catch {
+        // El inflight falló, continuar con fallback
+      }
+    }
+
+    // 3️⃣ Intentar fetch de DATOS REALES (con fallback automático a mock)
+    const p = (async () => {
+      const data = await fetchMarketDataReal(market);
+      const isReal = data[0]?.source === "real";
+      await setCache(key, data, isReal);
+      return data;
+    })();
+
+    inflight.set(key, p);
+
+    try {
+      const data = await p;
+      const isReal = data[0]?.source === "real";
+      
+      console.log(`✅ [/api/markets] Retornando datos ${isReal ? 'REALES' : 'MOCK'} para ${market}`);
+      
+      return NextResponse.json(data, { 
+        status: 200,
+        headers: {
+          'X-Data-Source': isReal ? 'real' : 'mock',
+          'Cache-Control': 'public, s-maxage=300'
+        }
+      });
+    } catch (error) {
+      console.warn(`[/api/markets] Fetch failed for ${market}:`, error);
+
+      // 4️⃣ Fallback: mock derivado o base
+      let fallback: Quote[];
+
+      // Reintentar obtener caché por si otro proceso lo guardó
+      const fallbackCache = await getCache(key);
+
+      if (fallbackCache) {
+        const hasRealData = fallbackCache.data[0]?.source === "real";
+        fallback = hasRealData 
+          ? fallbackCache.data
+          : (fallbackCache.anchorTs ? deriveMock(fallbackCache, market) : simulate(fallbackCache));
+      } else {
+        fallback = getBaseMock(market, SYMBOLS_MAP[market] ?? []);
+      }
+
+      await setCache(key, fallback, false);
+      
+      console.log(`[/api/markets] Retornando FALLBACK para ${market}`);
+      
+      return NextResponse.json(fallback, { 
+        status: 200,
+        headers: {
+          'X-Data-Source': 'fallback-mock'
+        }
+      });
+    } finally {
+      inflight.delete(key);
+    }
+  } catch (error) {
+    // Último recurso: garantizar que siempre hay respuesta
+    console.error("[/api/markets] Fatal error:", error);
+    return NextResponse.json(
+      { error: "internal_error", message: "Failed to load market data" },
+      { status: 500 }
+    );
   }
 }

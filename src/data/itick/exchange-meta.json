@@ -1,0 +1,324 @@
+{
+  "NASDAQ": {
+    "label": "NASDAQ",
+    "scope": "US",
+    "market": "acciones",
+    "region": "US",
+    "apiType": "stock"
+  },
+  "NYSE": {
+    "label": "NYSE",
+    "scope": "US",
+    "market": "acciones",
+    "region": "US",
+    "apiType": "stock"
+  },
+  "AMEX": {
+    "label": "AMEX",
+    "scope": "US",
+    "market": "acciones",
+    "region": "US",
+    "apiType": "stock"
+  },
+  "OTC": {
+    "label": "OTC",
+    "scope": "US",
+    "market": "acciones",
+    "region": "US",
+    "apiType": "stock"
+  },
+  "CBOE": {
+    "label": "CBOE",
+    "scope": "US",
+    "market": "acciones",
+    "region": "US",
+    "apiType": "stock"
+  },
+  "HKEX": {
+    "label": "Hong Kong",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "HK",
+    "apiType": "stock"
+  },
+  "SSE": {
+    "label": "Shanghai",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "SH",
+    "apiType": "stock"
+  },
+  "SZSE": {
+    "label": "Shenzhen",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "SZ",
+    "apiType": "stock"
+  },
+  "TWSE": {
+    "label": "Taiwan",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "TW",
+    "apiType": "stock"
+  },
+  "TPEX": {
+    "label": "Taipei OTC",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "TW",
+    "apiType": "stock"
+  },
+  "SGX": {
+    "label": "Singapore",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "SG",
+    "apiType": "stock"
+  },
+  "TSE": {
+    "label": "Tokyo",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "JP",
+    "apiType": "stock"
+  },
+  "NAG": {
+    "label": "Nagoya",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "JP",
+    "apiType": "stock"
+  },
+  "SAPSE": {
+    "label": "Sapporo",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "JP",
+    "apiType": "stock"
+  },
+  "FSE": {
+    "label": "Frankfurt",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "DE",
+    "apiType": "stock"
+  },
+  "FWB": {
+    "label": "Frankfurt Xetra",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "DE",
+    "apiType": "stock"
+  },
+  "SET": {
+    "label": "Thailand",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "TH",
+    "apiType": "stock"
+  },
+  "NSE": {
+    "label": "India NSE",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "IN",
+    "apiType": "stock"
+  },
+  "MYX": {
+    "label": "Malaysia",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "MY",
+    "apiType": "stock"
+  },
+  "BIST": {
+    "label": "Borsa Istanbul",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "TR",
+    "apiType": "stock"
+  },
+  "BME": {
+    "label": "Madrid",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "ES",
+    "apiType": "stock"
+  },
+  "BMV": {
+    "label": "Mexico",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "MX",
+    "apiType": "stock"
+  },
+  "MIL": {
+    "label": "Milan",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "IT",
+    "apiType": "stock"
+  },
+  "EURONEXT": {
+    "label": "Euronext",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "EU",
+    "apiType": "stock"
+  },
+  "TASE": {
+    "label": "Tel Aviv",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "IL",
+    "apiType": "stock"
+  },
+  "BCBA": {
+    "label": "Buenos Aires",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "AR",
+    "apiType": "stock"
+  },
+  "ASX": {
+    "label": "Australia",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "AU",
+    "apiType": "stock"
+  },
+  "TSX": {
+    "label": "Toronto",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "CA",
+    "apiType": "stock"
+  },
+  "BVL": {
+    "label": "Lima",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "PE",
+    "apiType": "stock"
+  },
+  "NSENG": {
+    "label": "Nigeria",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "NG",
+    "apiType": "stock"
+  },
+  "PSX": {
+    "label": "Pakistan",
+    "scope": "GLOBAL",
+    "market": "acciones",
+    "region": "PK",
+    "apiType": "stock"
+  },
+  "BA": {
+    "label": "Binance",
+    "scope": "GLOBAL",
+    "market": "crypto",
+    "region": "BA",
+    "apiType": "crypto"
+  },
+  "BT": {
+    "label": "Bitget",
+    "scope": "GLOBAL",
+    "market": "crypto",
+    "region": "BT",
+    "apiType": "crypto"
+  },
+  "PB": {
+    "label": "ProBit",
+    "scope": "GLOBAL",
+    "market": "crypto",
+    "region": "PB",
+    "apiType": "crypto"
+  },
+  "GB": {
+    "label": "Global FX",
+    "scope": "GLOBAL",
+    "market": "forex",
+    "region": "GB",
+    "apiType": "forex"
+  },
+  "ES": {
+    "label": "España índices",
+    "scope": "GLOBAL",
+    "market": "indices",
+    "region": "ES",
+    "apiType": "indices"
+  },
+  "TH": {
+    "label": "Tailandia índices",
+    "scope": "GLOBAL",
+    "market": "indices",
+    "region": "TH",
+    "apiType": "indices"
+  },
+  "IN": {
+    "label": "India índices",
+    "scope": "GLOBAL",
+    "market": "indices",
+    "region": "IN",
+    "apiType": "indices"
+  },
+  "DE": {
+    "label": "Alemania índices",
+    "scope": "GLOBAL",
+    "market": "indices",
+    "region": "DE",
+    "apiType": "indices"
+  },
+  "CME": {
+    "label": "CME",
+    "scope": "US",
+    "market": "commodities",
+    "region": "US",
+    "apiType": "future"
+  },
+  "CBOT": {
+    "label": "CBOT",
+    "scope": "US",
+    "market": "commodities",
+    "region": "US",
+    "apiType": "future"
+  },
+  "ICEUS": {
+    "label": "ICE US",
+    "scope": "US",
+    "market": "commodities",
+    "region": "US",
+    "apiType": "future"
+  },
+  "NYMEX": {
+    "label": "NYMEX",
+    "scope": "US",
+    "market": "commodities",
+    "region": "US",
+    "apiType": "future"
+  },
+  "COMEX": {
+    "label": "COMEX",
+    "scope": "US",
+    "market": "commodities",
+    "region": "US",
+    "apiType": "future"
+  },
+  "HK": {
+    "label": "Hong Kong Futures",
+    "scope": "GLOBAL",
+    "market": "commodities",
+    "region": "HK",
+    "apiType": "future"
+  },
+  "CN": {
+    "label": "China Futures",
+    "scope": "GLOBAL",
+    "market": "commodities",
+    "region": "CN",
+    "apiType": "future"
+  }
+}

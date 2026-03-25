@@ -68,7 +68,7 @@ export function OpenTradesMobile({
               <div className="col-span-2">
                 <p className="opacity-60">Rendimiento</p>
                 <p className={`font-medium ${pnlPos ? "text-green-400" : "text-red-400"}`}>
-                  {formatCurrency(live.pnl, "en-US", currency)}&nbsp;({live.pct.toFixed(2)}%)
+                  {formatCurrency(live.pnl, "en-US", currency, { compactSmallValues: true })}&nbsp;({live.pct.toFixed(2)}%)
                 </p>
               </div>
             </div>

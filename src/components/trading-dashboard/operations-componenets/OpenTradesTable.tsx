@@ -66,7 +66,7 @@ export function OpenTradesTable({
                 </td>
                 <td className="py-3 px-4 border-r border-[var(--color-border)]/30 text-[var(--color-text)]">{t.leverage}x</td>
                 <td className={`py-3 px-4 border-r border-[var(--color-border)]/30 ${pnlPos ? "text-green-400" : "text-red-400"}`}>
-                  {formatCurrency(live.pnl, "en-US", currency)}
+                  {formatCurrency(live.pnl, "en-US", currency, { compactSmallValues: true })}
                 </td>
                 <td className={`py-3 px-4 border-r border-[var(--color-border)]/30 ${pnlPos ? "text-green-400" : "text-red-400"}`}>
                   {live.pct.toFixed(2)}%

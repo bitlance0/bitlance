@@ -203,7 +203,7 @@ export default function NewsSection() {
       id="news"
       className="py-24 border-t border-border bg-background text-foreground transition-colors duration-300"
     >
-      <div className="max-w-7xl mx-auto px-6 space-y-14">
+      <div className="max-w-7xl mx-auto px-4 md:px-6 space-y-14">
         {/* ===== Header ===== */}
         <div className="text-center space-y-4">
           <motion.h2 

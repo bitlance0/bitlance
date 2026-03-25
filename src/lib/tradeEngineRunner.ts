@@ -1,130 +1,189 @@
-// src/lib/tradeEngineRunner.ts
 import { db } from "@/db";
 import { trades } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import SYMBOLS_MAP from "@/lib/symbolsMap";
+import { and, eq } from "drizzle-orm";
+import { isSymbolMarketOpen } from "@/lib/marketSessions";
+import {
+  fetchItickLatestQuote,
+  ItickQuoteError,
+  type ItickQuoteContext,
+} from "@/lib/itick/quoteServer";
 
-const APP_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-const MARKET_URL = `${APP_BASE_URL}/api/markets?market=all`;
+const APP_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 const ACTIVATE_URL = `${APP_BASE_URL}/api/trade/pending/activate`;
 const CLOSE_URL = `${APP_BASE_URL}/api/trade/close`;
+const TRADE_ENGINE_INTERNAL_KEY = process.env.TRADE_ENGINE_INTERNAL_KEY?.trim();
 
-function marketOfSymbol(sym: string | null): keyof typeof SYMBOLS_MAP | "acciones" {
-  if (!sym) return "acciones";
-  const S = sym.toUpperCase();
-  for (const [m, arr] of Object.entries(SYMBOLS_MAP)) {
-    if (arr.map((x) => x.toUpperCase()).includes(S)) return m as keyof typeof SYMBOLS_MAP;
-  }
-  return "acciones";
-}
+type TradeEngineBatchResult = {
+  scanned: number;
+  activated: number;
+  closed: number;
+};
 
-function isMarketOpenForMarket(market: string, now: Date): boolean {
-  const utc = new Date(now.toISOString());
-  const day = utc.getUTCDay();
-  const hour = utc.getUTCHours();
-  const minute = utc.getUTCMinutes();
-  const timeMinutes = hour * 60 + minute;
-
-  const inRange = (sh: number, sm: number, eh: number, em: number) => {
-    const start = sh * 60 + sm;
-    const end = eh * 60 + em;
-    return timeMinutes >= start && timeMinutes <= end;
+export type TradeEngineRunResult = {
+  ok: true;
+  pending: {
+    scanned: number;
+    activated: number;
   };
+  open: {
+    scanned: number;
+    closed: number;
+  };
+};
 
-  if (market === "crypto") return true;
-
-  if (market === "fx") {
-    if (day === 0 || day === 6) return false;
-    return true;
+function parseMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata) return {};
+  if (typeof metadata === "object") return metadata as Record<string, unknown>;
+  if (typeof metadata !== "string") return {};
+  try {
+    const parsed = JSON.parse(metadata) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
   }
-
-  if (["indices", "acciones", "commodities"].includes(market)) {
-    if (day === 0 || day === 6) return false;
-    return inRange(14, 30, 21, 0);
-  }
-
-  if (day === 0 || day === 6) return false;
-  return inRange(13, 0, 21, 0);
 }
 
-async function fetchPrices() {
-  const res = await fetch(MARKET_URL);
-  if (!res.ok) return new Map();
-  const data = await res.json();
-  const map = new Map<string, number>();
-  for (const q of data) {
-    if (q?.symbol && typeof q.price === "number") {
-      map.set(q.symbol.toUpperCase(), q.price);
-    }
-  }
-  return map;
+function getTradeQuoteContext(metadata: unknown): ItickQuoteContext {
+  const parsed = parseMetadata(metadata);
+  const raw =
+    typeof parsed.quoteContext === "object" && parsed.quoteContext !== null
+      ? (parsed.quoteContext as Record<string, unknown>)
+      : {};
+
+  return {
+    market: String(raw.market ?? ""),
+    exchange: String(raw.exchange ?? ""),
+    scope: String(raw.scope ?? ""),
+  };
 }
 
-async function processPendingTrades(priceMap: Map<string, number>, now: Date) {
+function toNumber(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toPositiveNumber(value: unknown) {
+  const n = toNumber(value);
+  return n !== null && n > 0 ? n : null;
+}
+
+function buildInternalHeaders() {
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+  };
+  if (TRADE_ENGINE_INTERNAL_KEY) {
+    headers["x-trade-engine-key"] = TRADE_ENGINE_INTERNAL_KEY;
+  } else if (process.env.NODE_ENV !== "production") {
+    headers["x-trade-engine-key"] = "dev-local";
+  }
+  return headers;
+}
+
+async function resolvePriceForTrade(trade: typeof trades.$inferSelect) {
+  const context = getTradeQuoteContext(trade.metadata);
+  const quote = await fetchItickLatestQuote(String(trade.symbol), context);
+  return quote.price;
+}
+
+async function processPendingTrades(now: Date, userId?: string): Promise<TradeEngineBatchResult> {
   const pending = await db
     .select()
     .from(trades)
-    .where(eq(trades.status, "pending" as any));
+    .where(
+      userId
+        ? and(eq(trades.status, "pending" as "pending"), eq(trades.userId, userId))
+        : eq(trades.status, "pending" as "pending")
+    );
 
-  for (const t of pending) {
+  let activated = 0;
+
+  for (const trade of pending) {
     try {
-      const symbol = String(t.symbol).toUpperCase();
-      const price = priceMap.get(symbol);
-      if (!price) continue;
+      const symbol = String(trade.symbol).toUpperCase();
 
-      if (t.expiresAt && new Date(t.expiresAt) < now) continue;
+      if (trade.expiresAt && new Date(trade.expiresAt) < now) {
+        continue;
+      }
 
-      const market = marketOfSymbol(symbol);
-      if (!isMarketOpenForMarket(market, now)) continue;
+      const marketStatus = isSymbolMarketOpen(symbol, now);
+      if (!marketStatus.open) continue;
 
-      const trigger = Number(t.triggerPrice ?? 0);
-      const rule = String(t.triggerRule ?? "");
-      if (!trigger || !rule) continue;
+      const trigger = toPositiveNumber(trade.triggerPrice);
+      const rule = String(trade.triggerRule ?? "").toLowerCase();
+      if (!trigger || !(rule === "gte" || rule === "lte")) continue;
 
+      const price = await resolvePriceForTrade(trade);
       const gteOk = rule === "gte" && price >= trigger;
       const lteOk = rule === "lte" && price <= trigger;
       if (!gteOk && !lteOk) continue;
 
-      await fetch(ACTIVATE_URL, {
+      const response = await fetch(ACTIVATE_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tradeId: t.id, currentPrice: price }),
+        headers: buildInternalHeaders(),
+        body: JSON.stringify({ tradeId: trade.id }),
       });
-    } catch (err) {
-      console.error("Error procesando pendiente:", t.id, err);
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        console.warn(
+          `[trade-engine] No se pudo activar trade ${trade.id}: ${response.status} ${detail}`
+        );
+        continue;
+      }
+      activated += 1;
+    } catch (error) {
+      if (error instanceof ItickQuoteError && error.code === "rate_limited") {
+        console.warn("[trade-engine] iTICK rate limited while activating pending");
+        break;
+      }
+      console.error("[trade-engine] Error procesando pendiente:", trade.id, error);
     }
   }
+
+  return {
+    scanned: pending.length,
+    activated,
+    closed: 0,
+  };
 }
 
-async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
+async function processOpenTrades(now: Date, userId?: string): Promise<TradeEngineBatchResult> {
   const open = await db
     .select()
     .from(trades)
-    .where(eq(trades.status, "open" as any));
+    .where(
+      userId
+        ? and(eq(trades.status, "open" as "open"), eq(trades.userId, userId))
+        : eq(trades.status, "open" as "open")
+    );
 
-  for (const t of open) {
+  let closed = 0;
+
+  for (const trade of open) {
     try {
-      const symbol = String(t.symbol).toUpperCase();
-      const price = priceMap.get(symbol);
-      if (!price) continue;
+      const symbol = String(trade.symbol).toUpperCase();
+      const marketStatus = isSymbolMarketOpen(symbol, now);
+      if (!marketStatus.open) continue;
 
-      const market = marketOfSymbol(symbol);
-      if (!isMarketOpenForMarket(market, now)) continue;
+      const side = trade.side === "sell" ? "sell" : "buy";
+      const tp = toPositiveNumber(trade.takeProfit);
+      const sl = toPositiveNumber(trade.stopLoss);
 
-      const side = t.side === "sell" ? "sell" : "buy";
-      const tp = t.takeProfit ? Number(t.takeProfit) : null;
-      const sl = t.stopLoss ? Number(t.stopLoss) : null;
+      if (tp === null && sl === null) {
+        continue;
+      }
+
+      const price = await resolvePriceForTrade(trade);
 
       let shouldClose = false;
-
-      if (sl && Number.isFinite(sl)) {
+      if (sl !== null) {
         if ((side === "buy" && price <= sl) || (side === "sell" && price >= sl)) {
           shouldClose = true;
         }
       }
 
-      if (!shouldClose && tp && Number.isFinite(tp)) {
+      if (!shouldClose && tp !== null) {
         if ((side === "buy" && price >= tp) || (side === "sell" && price <= tp)) {
           shouldClose = true;
         }
@@ -132,24 +191,51 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
 
       if (!shouldClose) continue;
 
-      await fetch(CLOSE_URL, {
+      const response = await fetch(CLOSE_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tradeId: t.id, closePrice: price }),
+        headers: buildInternalHeaders(),
+        body: JSON.stringify({ tradeId: trade.id }),
       });
-    } catch (err) {
-      console.error("Error procesando abierto:", t.id, err);
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        console.warn(
+          `[trade-engine] No se pudo cerrar trade ${trade.id}: ${response.status} ${detail}`
+        );
+        continue;
+      }
+      closed += 1;
+    } catch (error) {
+      if (error instanceof ItickQuoteError && error.code === "rate_limited") {
+        console.warn("[trade-engine] iTICK rate limited while closing trades");
+        break;
+      }
+      console.error("[trade-engine] Error procesando abierto:", trade.id, error);
     }
   }
+
+  return {
+    scanned: open.length,
+    activated: 0,
+    closed,
+  };
 }
 
-export async function runTradeEngineOnce() {
+export async function runTradeEngineOnce(options?: { userId?: string }): Promise<TradeEngineRunResult> {
   const now = new Date();
-  const prices = await fetchPrices();
-  if (!prices.size) return { ok: false, message: "Sin precios" };
+  const userId = options?.userId;
 
-  await processPendingTrades(prices, now);
-  await processOpenTrades(prices, now);
+  const pending = await processPendingTrades(now, userId);
+  const open = await processOpenTrades(now, userId);
 
-  return { ok: true };
+  return {
+    ok: true,
+    pending: {
+      scanned: pending.scanned,
+      activated: pending.activated,
+    },
+    open: {
+      scanned: open.scanned,
+      closed: open.closed,
+    },
+  };
 }

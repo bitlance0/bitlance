@@ -1,119 +1,272 @@
-// src/app/api/trade/pending/cancel/route.ts
 import { NextResponse } from "next/server";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { trades, user, transactions } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getActor } from "@/modules/auth/services/getActor";
+import { isSymbolMarketOpen } from "@/lib/marketSessions";
+import {
+  fetchItickLatestQuote,
+  ItickQuoteError,
+  type ItickQuoteContext,
+} from "@/lib/itick/quoteServer";
+
+function isInternalTradeEngineRequest(req: Request) {
+  const internalKey = process.env.TRADE_ENGINE_INTERNAL_KEY?.trim();
+  const headerKey = req.headers.get("x-trade-engine-key");
+  if (internalKey) return headerKey === internalKey;
+  if (process.env.NODE_ENV !== "production") return headerKey === "dev-local";
+  return false;
+}
+
+function parseTradeMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata) return {};
+  if (typeof metadata === "object") return metadata as Record<string, unknown>;
+  if (typeof metadata !== "string") return {};
+  try {
+    const parsed = JSON.parse(metadata) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function toNumber(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function resolveQuoteError(error: unknown) {
+  if (error instanceof ItickQuoteError) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: error.message,
+        detail: error.detail,
+      },
+      { status: error.status }
+    );
+  }
+  return null;
+}
 
 export async function POST(req: Request) {
   try {
-    const { tradeId, currentPrice } = await req.json();
+    const internalRequest = isInternalTradeEngineRequest(req);
+    const actor = internalRequest ? null : await getActor(req);
 
-    if (!tradeId || !currentPrice) {
+    if (!internalRequest && !actor?.user?.id) {
       return NextResponse.json(
-        { success: false, error: "Faltan tradeId o currentPrice" },
+        { success: false, error: "No autenticado" },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json();
+    const tradeId = String(body?.tradeId ?? "").trim();
+    if (!tradeId) {
+      return NextResponse.json(
+        { success: false, error: "Falta tradeId" },
         { status: 400 }
       );
     }
 
-    const [t] = await db.select().from(trades).where(eq(trades.id, String(tradeId)));
-
-    if (!t)
-      return NextResponse.json({ success: false, error: "Trade no encontrado" }, { status: 404 });
-
-    if (t.status !== "pending")
+    const [trade] = await db.select().from(trades).where(eq(trades.id, tradeId));
+    if (!trade) {
       return NextResponse.json(
-        { success: false, error: "El trade no está en estado pending" },
+        { success: false, error: "Trade no encontrado" },
+        { status: 404 }
+      );
+    }
+
+    if (!internalRequest && actor?.user?.id !== trade.userId) {
+      return NextResponse.json(
+        { success: false, error: "No autorizado para activar este trade" },
+        { status: 403 }
+      );
+    }
+
+    if (trade.status !== "pending") {
+      return NextResponse.json(
+        { success: false, error: "El trade no esta en estado pending" },
         { status: 400 }
       );
+    }
 
-    const trigger = Number(t.triggerPrice ?? 0);
-    const rule = String(t.triggerRule ?? "");
-    const nowPrice = Number(currentPrice);
+    if (trade.expiresAt && new Date(trade.expiresAt) < new Date()) {
+      return NextResponse.json(
+        { success: false, error: "La orden pendiente ya expiro" },
+        { status: 400 }
+      );
+    }
 
-    // Validación de reglas
+    const marketStatus = isSymbolMarketOpen(String(trade.symbol));
+    if (!marketStatus.open) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Mercado cerrado para ${String(trade.symbol).toUpperCase()}. No se puede activar la orden.`,
+          market: marketStatus.market,
+        },
+        { status: 400 }
+      );
+    }
+
+    const trigger = toNumber(trade.triggerPrice);
+    const rule = String(trade.triggerRule ?? "").toLowerCase();
+    if (!trigger || !(rule === "gte" || rule === "lte")) {
+      return NextResponse.json(
+        { success: false, error: "Trade pending invalido (trigger/rule)" },
+        { status: 400 }
+      );
+    }
+
+    const metadata = parseTradeMetadata(trade.metadata);
+    const quoteContextRaw =
+      typeof metadata.quoteContext === "object" && metadata.quoteContext !== null
+        ? (metadata.quoteContext as Record<string, unknown>)
+        : {};
+    const quoteContext: ItickQuoteContext = {
+      market: String(quoteContextRaw.market ?? ""),
+      exchange: String(quoteContextRaw.exchange ?? ""),
+      scope: String(quoteContextRaw.scope ?? ""),
+    };
+
+    const quote = await fetchItickLatestQuote(String(trade.symbol), quoteContext);
+    const nowPrice = quote.price;
+
     if (rule === "gte" && nowPrice < trigger) {
-      return NextResponse.json({ success: false, error: "Condición gte no cumplida" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "Condicion gte no cumplida" },
+        { status: 400 }
+      );
     }
     if (rule === "lte" && nowPrice > trigger) {
-      return NextResponse.json({ success: false, error: "Condición lte no cumplida" }, { status: 400 });
-    }
-
-    // Usuario
-    const [u] = await db.select().from(user).where(eq(user.id, t.userId));
-    if (!u) return NextResponse.json({ success: false, error: "Usuario no encontrado" }, { status: 404 });
-
-    const qty = Number(t.quantity ?? 0);
-    const lev = Number(t.leverage ?? 1);
-
-    const marginUsed = (nowPrice * qty) / lev;
-    const balanceNum = Number(u.balance ?? 0);
-
-    if (balanceNum < marginUsed) {
       return NextResponse.json(
-        { success: false, error: "Saldo insuficiente para activar la operación" },
+        { success: false, error: "Condicion lte no cumplida" },
         { status: 400 }
       );
     }
 
-    // Parse metadata previa
-    const mdPrev =
-      typeof t.metadata === "string"
-        ? (() => { try { return JSON.parse(t.metadata); } catch { return {}; } })()
-        : (t.metadata || {});
+    const quantity = Number(trade.quantity ?? 0);
+    const leverage = Number(trade.leverage ?? 1);
+    if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(leverage) || leverage <= 0) {
+      return NextResponse.json(
+        { success: false, error: "Trade con cantidad/apalancamiento invalido" },
+        { status: 400 }
+      );
+    }
 
-    // Activar orden pendiente → abierta
-    const [opened] = await db
-      .update(trades)
-      .set({
-        entryPrice: nowPrice.toFixed(4),
-        status: "open",
-        orderType: "market", // la orden ya se activó y ahora es una operación normal
+    const marginUsed = Number(((nowPrice * quantity) / leverage).toFixed(2));
+    if (!Number.isFinite(marginUsed) || marginUsed <= 0) {
+      return NextResponse.json(
+        { success: false, error: "No se pudo calcular margen de activacion" },
+        { status: 400 }
+      );
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [debited] = await tx
+        .update(user)
+        .set({
+          balance: sql`(${user.balance}::numeric - ${marginUsed})::numeric`,
+        })
+        .where(and(eq(user.id, trade.userId), gte(user.balance, String(marginUsed))))
+        .returning({
+          balance: user.balance,
+        });
+
+      if (!debited) {
+        throw new Error("INSUFFICIENT_BALANCE");
+      }
+
+      const [opened] = await tx
+        .update(trades)
+        .set({
+          entryPrice: nowPrice.toFixed(4),
+          status: "open",
+          orderType: "market",
+          metadata: {
+            ...metadata,
+            activatedAt: new Date().toISOString(),
+            activatedFrom: "pending",
+            marginUsed,
+            quoteSource: "itick",
+            quoteContext: {
+              market: quote.market,
+              exchange: quote.exchange,
+              region: quote.region,
+              apiType: quote.apiType,
+            },
+            quoteTimestamp: quote.latestTradingDay || null,
+          },
+        })
+        .where(and(eq(trades.id, trade.id), eq(trades.status, "pending")))
+        .returning();
+
+      if (!opened) {
+        throw new Error("TRADE_ALREADY_PROCESSED");
+      }
+
+      await tx.insert(transactions).values({
+        id: crypto.randomUUID(),
+        userId: trade.userId,
+        type: "trade",
+        amount: (-marginUsed).toFixed(2),
+        status: "completed",
+        currency: "USD",
         metadata: {
-          ...mdPrev,
-          activatedAt: new Date().toISOString(),
-          activatedFrom: "pending",
+          kind: "trade_pending_activate",
+          tradeId: trade.id,
+          transitioned: "pending_to_open",
+          entryPrice: nowPrice.toFixed(4),
+          symbol: trade.symbol,
+          side: trade.side,
+          quantity,
+          leverage,
           marginUsed,
+          takeProfit: trade.takeProfit ?? null,
+          stopLoss: trade.stopLoss ?? null,
         },
-      })
-      .where(eq(trades.id, t.id))
-      .returning();
+      });
 
-    // Actualizar balance
-    const newBalance = balanceNum - marginUsed;
-    await db.update(user).set({ balance: newBalance.toFixed(2) }).where(eq(user.id, t.userId));
-
-    // Registrar transacción
-    await db.insert(transactions).values({
-      id: crypto.randomUUID(),
-      userId: t.userId,
-      type: "trade",
-      amount: (-marginUsed).toFixed(2),
-      status: "completed",
-      currency: "USD",
-      metadata: {
-        tradeId: t.id,
-        transitioned: "pending → open",
-        entryPrice: nowPrice.toFixed(4),
-        symbol: t.symbol,
-        side: t.side,
-        quantity: qty,
-        leverage: lev,
-        marginUsed,
-        takeProfit: t.takeProfit ?? null,
-        stopLoss: t.stopLoss ?? null,
-      },
-    } as any);
+      return {
+        trade: opened,
+        balanceAfter: Number(debited.balance),
+      };
+    });
 
     return NextResponse.json({
       success: true,
       trade: {
-        ...opened,
+        ...result.trade,
         marginUsed: marginUsed.toFixed(2),
-        balanceAfter: newBalance.toFixed(2),
+        balanceAfter: Number(result.balanceAfter.toFixed(2)),
       },
     });
   } catch (error) {
-    console.error("❌ Error activando pendiente:", error);
-    return NextResponse.json({ success: false, error: String(error) }, { status: 500 });
+    const quoteErrorResponse = resolveQuoteError(error);
+    if (quoteErrorResponse) return quoteErrorResponse;
+
+    if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
+      return NextResponse.json(
+        { success: false, error: "Saldo insuficiente para activar la operacion" },
+        { status: 400 }
+      );
+    }
+
+    if (error instanceof Error && error.message === "TRADE_ALREADY_PROCESSED") {
+      return NextResponse.json(
+        { success: false, error: "La orden pendiente ya fue procesada" },
+        { status: 409 }
+      );
+    }
+
+    console.error("Error activando pendiente:", error);
+    return NextResponse.json(
+      { success: false, error: "Error interno activando pendiente" },
+      { status: 500 }
+    );
   }
 }

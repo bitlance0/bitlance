@@ -17,7 +17,7 @@ export default function LeverageSection() {
 
   return (
     <section className="py-20 bg-card text-card-foreground border-t border-border">
-      <div className="max-w-6xl mx-auto px-6 text-center">
+      <div className="max-w-6xl mx-auto px-4 md:px-6 text-center">
         <h2 className="text-3xl md:text-4xl font-bold mb-6">
           Potencia tus inversiones
         </h2>

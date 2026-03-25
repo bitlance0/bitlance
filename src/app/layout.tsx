@@ -21,22 +21,16 @@ export const metadata: Metadata = {
   description: "Plataforma de gestión financiera",
 };
 
-// 🔹 Script para inicializar tema antes de hidratar React
+// 🔹 Tema forzado a oscuro antes de hidratar React
 const setInitialTheme = `(function() {
   try {
-    var theme = localStorage.getItem('theme');
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.classList.toggle('dark', theme === 'dark');
-    if (theme === 'dark' || theme === 'light') {
-      document.documentElement.setAttribute('data-theme', theme);
-      document.documentElement.classList.toggle('dark', theme === 'dark');
-    } else {
-      document.documentElement.setAttribute('data-theme', 'dark');
-      document.documentElement.classList.add('dark');
-    } 
-    
-    
-  } catch (e) {}
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.classList.add('dark');
+    localStorage.setItem('theme', 'dark');
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.classList.add('dark');
+  }
 })();`;
 
 import Script from "next/script";
@@ -45,7 +39,7 @@ import WhatsAppFloatingButton from "@/components/common/WhatsappButton";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" suppressHydrationWarning>
+    <html lang="es" className="dark" data-theme="dark" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

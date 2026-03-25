@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createChart,
   type IChartApi,
@@ -12,10 +12,12 @@ import {
   UTCTimestamp,
 } from "lightweight-charts";
 import { useMarketStore } from "@/stores/useMarketStore";
+import exchangeMetaJson from "@/data/itick/exchange-meta.json";
 import type { CandleData, ChartType, LoadMoreDirection } from "../types";
 import { VALID_INTERVALS, validateInterval, getIntervalInSeconds } from "../utils/intervals";
 import { getCached, setCached } from "../utils/cache";
 import { formatPrice } from "../utils/format";
+import { getFavoriteContext } from "@/lib/itick/favorites";
 
 let isChartInitializing = false;
 
@@ -34,9 +36,51 @@ function histKeyOf(symbol: string, interval: string, dir: "forward" | "backward"
   return `HIST::${symbol}::${interval}::${dir}`;
 }
 
+type ExchangeMeta = Record<
+  string,
+  {
+    scope?: string;
+    region?: string;
+    market?: string;
+  }
+>;
+
+type CandleSelectionContext = {
+  market: string;
+  scope: string;
+  exchange: string;
+};
+
+const exchangeMeta = exchangeMetaJson as ExchangeMeta;
+
+function normalizeMarket(value: string | null | undefined) {
+  const market = String(value ?? "").trim().toLowerCase();
+  if (!market) return "";
+  if (market === "fx") return "forex";
+  if (market === "stock") return "acciones";
+  if (market === "future") return "commodities";
+  if (market === "fund") return "funds";
+  if (market === "all") return "funds";
+  return market;
+}
+
+function inferMarketFromSymbol(symbol: string) {
+  const upper = symbol.toUpperCase();
+  if (upper.endsWith("USDT")) return "crypto";
+  if (/^[A-Z]{6}$/.test(upper)) return "forex";
+  return "acciones";
+}
+
 /* ===================== Hook ===================== */
 export function useAlphaChart(initialInterval: string) {
-  const { selectedSymbol } = useMarketStore();
+  const {
+    selectedSymbol,
+    selectedMarket,
+    selectedScope,
+    selectedExchange,
+    dataMarket,
+  } =
+    useMarketStore();
 
   // refs agrupadas
   const refs = useRef({
@@ -54,7 +98,12 @@ export function useAlphaChart(initialInterval: string) {
     lastLoad: { time: 0, dir: null as LoadMoreDirection },
     lastFetchAt: 0,
     lastHistAt: 0,
+    requestSeq: 0,
     abort: null as AbortController | null,
+    symbolReloadTimeout: null as NodeJS.Timeout | null,
+    crosshairHandler: null as ((param: any) => void) | null,
+    rangeHandler: null as (() => void) | null,
+    lastRenderedKey: "",
   });
 
   // estado UI
@@ -66,6 +115,7 @@ export function useAlphaChart(initialInterval: string) {
   const [currentPrice, setCurrentPrice] = useState("");
   const [currentTime, setCurrentTime] = useState("");
   const [isChangingSymbol, setIsChangingSymbol] = useState(false);
+  const dismissError = useCallback(() => setError(null), []);
 
   const cancelActive = useCallback(() => {
     if (refs.current.abort) {
@@ -73,6 +123,70 @@ export function useAlphaChart(initialInterval: string) {
       refs.current.abort = null;
     }
   }, []);
+
+  const resolveCandleContext = useCallback(
+    (symbol: string): CandleSelectionContext => {
+      const upperSymbol = symbol.toUpperCase();
+      const selectedRow = dataMarket.find(
+        (row) => String(row.symbol ?? "").toUpperCase() === upperSymbol
+      );
+      const storedContext = getFavoriteContext(upperSymbol);
+
+      const rowMarket = normalizeMarket(selectedRow?.market);
+      const storedMarket = normalizeMarket(storedContext?.market);
+      const selectedMarketNormalized = normalizeMarket(selectedMarket);
+
+      const rowExchange =
+        typeof selectedRow?.source === "string"
+          ? selectedRow.source.trim().toUpperCase()
+          : "";
+      const storedExchange = String(storedContext?.exchange ?? "")
+        .trim()
+        .toUpperCase();
+
+      const exchange = (
+        [selectedExchange, rowExchange, storedExchange]
+          .map((value) => String(value ?? "").trim().toUpperCase())
+          .find(Boolean) ?? ""
+      ).toUpperCase();
+      const exchangeInfo = exchange ? exchangeMeta[exchange] : undefined;
+
+      const exchangeMarket = normalizeMarket(exchangeInfo?.market);
+
+      let market = selectedMarketNormalized;
+      if (!market || market === "favoritas") {
+        market =
+          rowMarket ||
+          storedMarket ||
+          exchangeMarket ||
+          inferMarketFromSymbol(upperSymbol);
+      }
+      if (market === "favoritas") {
+        market = inferMarketFromSymbol(upperSymbol);
+      }
+
+      let scope = String(
+        selectedScope ??
+          storedContext?.scope ??
+          exchangeInfo?.scope ??
+          exchangeInfo?.region ??
+          ""
+      )
+        .trim()
+        .toUpperCase();
+
+      if (!scope) {
+        scope = market === "crypto" || market === "forex" ? "GLOBAL" : "US";
+      }
+
+      return {
+        market,
+        scope,
+        exchange,
+      };
+    },
+    [dataMarket, selectedExchange, selectedMarket, selectedScope]
+  );
 
   const mergeNoDup = useCallback((a: CandleData[], b: CandleData[]) => {
     const m = new Map<number, CandleData>();
@@ -170,29 +284,36 @@ export function useAlphaChart(initialInterval: string) {
     setCurrentTime("");
     setError(null);
 
-    const { loadMoreTimeout, resizeTimeout, series, chart } = refs.current;
+    const { loadMoreTimeout, resizeTimeout, symbolReloadTimeout, series, chart } = refs.current;
     if (loadMoreTimeout) { clearTimeout(loadMoreTimeout); refs.current.loadMoreTimeout = null; }
     if (resizeTimeout) { clearTimeout(resizeTimeout); refs.current.resizeTimeout = null; }
+    if (symbolReloadTimeout) { clearTimeout(symbolReloadTimeout); refs.current.symbolReloadTimeout = null; }
     if (series && chart) { try { chart.removeSeries(series); } catch {} refs.current.series = null; }
     if (chart) { try { chart.remove(); } catch {} refs.current.chart = null; }
+    refs.current.crosshairHandler = null;
+    refs.current.rangeHandler = null;
     isChartInitializing = false;
   }, [cancelActive]);
 
   /* ===================== Carga principal con SWR-lite + cooldown + coalescing ===================== */
   const load = useCallback(async (force = false): Promise<CandleData[]> => {
     const symbol = selectedSymbol || "";
+    if (!symbol) return [];
+
+    const { market, scope, exchange } = resolveCandleContext(symbol);
+    const cacheSymbol = `${symbol}|${market}|${scope}|${exchange}`;
     const interval = refs.current.interval;
 
     const now = Date.now();
     const gap = now - refs.current.lastFetchAt;
 
     // 1) sirvo cache si existe y no es force
-    const cached = getCached(symbol, interval);
+    const cached = getCached(cacheSymbol, interval);
     if (!force && cached) {
       refs.current.data = cached;
 
       // SWR-lite: si ya pasó un rato (20s), refresco en background
-      if (gap > 20000) { (async () => { try { await load(true); } catch {} })(); }
+      // Refresh silencioso deshabilitado para evitar solicitudes redundantes.
       return cached;
     }
 
@@ -202,7 +323,7 @@ export function useAlphaChart(initialInterval: string) {
     }
 
     // 3) coalescing
-    const inFlightKey = keyOf(symbol, interval, force);
+    const inFlightKey = keyOf(cacheSymbol, interval, force);
     if (inFlight.has(inFlightKey)) {
       try { return await inFlight.get(inFlightKey)!; }
       catch { inFlight.delete(inFlightKey); }
@@ -211,6 +332,7 @@ export function useAlphaChart(initialInterval: string) {
     cancelActive();
     const ac = new AbortController();
     refs.current.abort = ac;
+    const requestId = ++refs.current.requestSeq;
 
     refs.current.isLoading = true;
     setIsLoading(true);
@@ -219,6 +341,9 @@ export function useAlphaChart(initialInterval: string) {
     const promise = (async (): Promise<CandleData[]> => {
       try {
         const params = new URLSearchParams({ symbol, interval });
+        if (market) params.set("market", market);
+        if (scope) params.set("scope", scope);
+        if (exchange) params.set("exchange", exchange);
         if (force) params.set("timestamp", String(Date.now()));
 
         const res = await fetch(`/api/alpha-candles?${params.toString()}`, { signal: ac.signal });
@@ -235,8 +360,11 @@ export function useAlphaChart(initialInterval: string) {
         const valid = candles.filter(c => c && typeof c.time === "number" && Number.isFinite(c.close));
         if (!valid.length) throw new Error("No se encontraron datos para este símbolo");
 
+        if (requestId === refs.current.requestSeq) {
+          setError(null);
+        }
         refs.current.data = valid;
-        setCached(symbol, interval, valid);
+        setCached(cacheSymbol, interval, valid);
         refs.current.lastFetchAt = Date.now();
 
         return valid;
@@ -252,19 +380,26 @@ export function useAlphaChart(initialInterval: string) {
       return data;
     } catch (err: any) {
       if (err?.name === "AbortError") return [];
-      setError(String(err?.message ?? "Error desconocido"));
-      const fallback = getCached(symbol, interval);
+      if (requestId === refs.current.requestSeq) {
+        setError(String(err?.message ?? "Error desconocido"));
+      }
+      const fallback = getCached(cacheSymbol, interval);
       if (fallback) {
         refs.current.data = fallback;
+        if (requestId === refs.current.requestSeq) {
+          setError(null);
+        }
         return fallback;
       }
       return [];
     } finally {
       refs.current.isLoading = false;
-      refs.current.abort = null;
-      setIsLoading(false);
+      if (requestId === refs.current.requestSeq) {
+        refs.current.abort = null;
+        setIsLoading(false);
+      }
     }
-  }, [selectedSymbol, cancelActive]);
+  }, [selectedSymbol, resolveCandleContext, cancelActive]);
 
   /* ===================== Carga histórica con cooldown + coalescing ===================== */
   const loadMore = useCallback(async (dir: Exclude<LoadMoreDirection, null>, refSecs: number) => {
@@ -280,10 +415,14 @@ export function useAlphaChart(initialInterval: string) {
     if (refSecs > Math.floor(Date.now() / 1000) + 86400) return [];
 
     const symbol = selectedSymbol || "";
+    if (!symbol) return [];
+
+    const { market, scope, exchange } = resolveCandleContext(symbol);
+    const cacheSymbol = `${symbol}|${market}|${scope}|${exchange}`;
     const interval = refs.current.interval;
 
     // coalescing histórico (por dir)
-    const inflKey = histKeyOf(symbol, interval, dir);
+    const inflKey = histKeyOf(cacheSymbol, interval, dir);
     if (inFlightHist.has(inflKey)) {
       try { return await inFlightHist.get(inflKey)!; }
       catch { inFlightHist.delete(inflKey); }
@@ -306,6 +445,9 @@ export function useAlphaChart(initialInterval: string) {
           direction: dir,
           referenceTime: String(Math.floor(refSecs)),
         });
+        if (market) params.set("market", market);
+        if (scope) params.set("scope", scope);
+        if (exchange) params.set("exchange", exchange);
 
         const res = await fetch(`/api/alpha-candles?${params.toString()}`, { signal: ac.signal });
         if (ac.signal.aborted) return [];
@@ -332,7 +474,7 @@ export function useAlphaChart(initialInterval: string) {
       refs.current.abort = null;
       setLoadingMore(null);
     }
-  }, [selectedSymbol, cancelActive]);
+  }, [selectedSymbol, resolveCandleContext, cancelActive]);
 
   /* ===================== Render serie =====================
     🔧 FIX: Se agregó verificación de refs.current.chart antes de acceder
@@ -342,13 +484,19 @@ export function useAlphaChart(initialInterval: string) {
   ========================================================== */
   const renderSeries = useCallback(async (force = false) => {
     const chart = refs.current.chart;
-    if (!chart || !chartReady) return;
+    if (!chart) return;
+    const resolved = selectedSymbol
+      ? resolveCandleContext(selectedSymbol)
+      : { market: selectedMarket ?? "", scope: selectedScope ?? "", exchange: selectedExchange ?? "" };
+    const cacheSymbol = `${selectedSymbol || ""}|${resolved.market}|${resolved.scope}|${
+      resolved.exchange
+    }`;
 
     const candles = await load(force);
     if (!candles.length) {
-      setError("No hay datos disponibles para mostrar");
       return;
     }
+    setError(null);
 
     const s = createSeries(candles);
     if (!s) return;
@@ -364,9 +512,15 @@ export function useAlphaChart(initialInterval: string) {
       const first = candles[Math.max(0, total - Math.min(100, total))].time as Time;
       tsInit.setVisibleRange({ from: first, to: last });
     }
+    refs.current.isInitialLoad = false;
 
     // crosshair (suscripción simple; lightweight-charts ignora subs duplicadas iguales)
-    chartAfterCreate.subscribeCrosshairMove((param) => {
+    if (refs.current.crosshairHandler) {
+      chartAfterCreate.unsubscribeCrosshairMove(refs.current.crosshairHandler);
+      refs.current.crosshairHandler = null;
+    }
+
+    const crosshairHandler = (param: any) => {
       const seriesRef = refs.current.series;
       if (!seriesRef) {
         setCurrentPrice("");
@@ -404,7 +558,9 @@ export function useAlphaChart(initialInterval: string) {
           minute: "2-digit",
         })
       );
-    });
+    };
+    chartAfterCreate.subscribeCrosshairMove(crosshairHandler);
+    refs.current.crosshairHandler = crosshairHandler;
 
     // lazy-load en bordes
     const onRange = () => {
@@ -436,7 +592,7 @@ export function useAlphaChart(initialInterval: string) {
             const merged = mergeNoDup(hist, data);
             refs.current.data = merged;
             updateSeries(merged);
-            setCached(selectedSymbol || "", refs.current.interval, merged);
+            setCached(cacheSymbol, refs.current.interval, merged);
           }
         }
 
@@ -446,7 +602,7 @@ export function useAlphaChart(initialInterval: string) {
             const merged = mergeNoDup(data, fwd);
             refs.current.data = merged;
             updateSeries(merged);
-            setCached(selectedSymbol || "", refs.current.interval, merged);
+            setCached(cacheSymbol, refs.current.interval, merged);
           }
         }
       }, 300);
@@ -457,9 +613,15 @@ export function useAlphaChart(initialInterval: string) {
     if (!chartForSubs) return;
 
     const tsSubs = chartForSubs.timeScale();
+    if (refs.current.rangeHandler) {
+      tsSubs.unsubscribeVisibleTimeRangeChange(refs.current.rangeHandler);
+      tsSubs.unsubscribeSizeChange(refs.current.rangeHandler);
+      refs.current.rangeHandler = null;
+    }
     tsSubs.subscribeVisibleTimeRangeChange(onRange);
     tsSubs.subscribeSizeChange(onRange);
-  }, [chartReady, load, createSeries, updateSeries, mergeNoDup, loadMore, selectedSymbol]);
+    refs.current.rangeHandler = onRange;
+  }, [load, createSeries, updateSeries, mergeNoDup, loadMore, selectedSymbol, selectedMarket, selectedScope, selectedExchange, resolveCandleContext]);
 
   /* ===================== Zoom ===================== */
   const zoom = useCallback((dir: "in" | "out" | "reset") => {
@@ -495,10 +657,6 @@ export function useAlphaChart(initialInterval: string) {
     initChart();
     return () => { refs.current.mounted = false; cleanup(); };
   }, [initChart, cleanup]);
-
-  useEffect(() => {
-    if (chartReady && refs.current.isInitialLoad) renderSeries(false);
-  }, [chartReady, renderSeries]);
 
   useEffect(() => {
     if (chartReady && refs.current.data.length && !refs.current.isInitialLoad) {
@@ -551,34 +709,75 @@ export function useAlphaChart(initialInterval: string) {
     };
   }, [chartReady]);
 
+  const selectedContextKey = useMemo(() => {
+    if (!selectedSymbol) return "";
+    const ctx = resolveCandleContext(selectedSymbol);
+    return `${selectedSymbol}|${ctx.market}|${ctx.scope}|${ctx.exchange}`;
+  }, [selectedSymbol, resolveCandleContext]);
+
   /* ===================== Cambio de símbolo / intervalo inicial ===================== */
   useEffect(() => {
-    if (!selectedSymbol) return;
-    (async () => {
-      setIsChangingSymbol(true);
-      cleanup();
-      refs.current.data = [];
-      refs.current.interval = validateInterval(initialInterval);
-      refs.current.isInitialLoad = true;
-      setError(null);
-      setCurrentPrice(""); setCurrentTime("");
+    if (!selectedSymbol || !selectedContextKey) {
+      refs.current.lastRenderedKey = "";
+      return;
+    }
+    if (refs.current.symbolReloadTimeout) {
+      clearTimeout(refs.current.symbolReloadTimeout);
+      refs.current.symbolReloadTimeout = null;
+    }
+
+    refs.current.symbolReloadTimeout = setTimeout(() => {
+      void (async () => {
+        const renderKey = `${selectedContextKey}|${validateInterval(initialInterval)}`;
+        if (
+          refs.current.lastRenderedKey === renderKey &&
+          refs.current.data.length > 0 &&
+          refs.current.series
+        ) return;
+
+        setIsChangingSymbol(true);
+        try {
+        cleanup();
+        refs.current.data = [];
+        refs.current.interval = validateInterval(initialInterval);
+        refs.current.isInitialLoad = true;
+        setError(null);
+        setCurrentPrice("");
+        setCurrentTime("");
 
       // pequeña pausa para desmontar DOM del chart y evitar carreras
-      await new Promise(r => setTimeout(r, 140));
-      initChart();
+          await new Promise((r) => setTimeout(r, 140));
+          initChart();
 
-      // espera a que chartReady sea true
-      const wait = () => new Promise<void>(resolve => {
-        const tick = () => (refs.current.chart ? resolve() : setTimeout(tick, 40));
-        tick();
-      });
-      await wait();
+          const wait = () =>
+            new Promise<void>((resolve) => {
+              const tick = () => (refs.current.chart ? resolve() : setTimeout(tick, 40));
+              tick();
+            });
+          await wait();
 
-      await renderSeries(true);
-      setIsChangingSymbol(false);
-    })();
+          await renderSeries(true);
+          if (refs.current.data.length > 0 && refs.current.series) {
+            refs.current.lastRenderedKey = renderKey;
+          } else {
+            refs.current.lastRenderedKey = "";
+          }
+        } catch {
+          refs.current.lastRenderedKey = "";
+        } finally {
+          setIsChangingSymbol(false);
+        }
+      })();
+    }, 120);
+
+    return () => {
+      if (refs.current.symbolReloadTimeout) {
+        clearTimeout(refs.current.symbolReloadTimeout);
+        refs.current.symbolReloadTimeout = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSymbol, initialInterval]);
+  }, [selectedSymbol, selectedContextKey, initialInterval]);
 
   /* ===================== Retorno ===================== */
   return {
@@ -601,6 +800,7 @@ export function useAlphaChart(initialInterval: string) {
       changeType,
       zoom,
       refresh: () => renderSeries(true),
+      dismissError,
     },
   };
 }

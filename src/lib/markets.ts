@@ -1,2 +1,2 @@
 // src/lib/markets.ts
-export const MARKETS = ['fx', 'indices','acciones','commodities','crypto','all'] as const;
+export const MARKETS = ['favoritas', 'fx', 'indices','acciones','commodities','crypto','all'] as const;

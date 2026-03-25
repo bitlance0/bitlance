@@ -16,12 +16,65 @@ function notifyTradesUpdatedGlobal() {
   }
 }
 
+type TradeEngineRunResponse = {
+  ok?: boolean;
+  pending?: {
+    scanned?: number;
+    activated?: number;
+  };
+  open?: {
+    scanned?: number;
+    closed?: number;
+  };
+  error?: string;
+};
+
+type StoredQuoteContext = {
+  market?: string | null;
+  exchange?: string | null;
+  scope?: string | null;
+};
+
+function parseTradeMetadata(metadata: Trade["metadata"]): Record<string, unknown> {
+  if (!metadata) return {};
+  if (typeof metadata === "object") return metadata as Record<string, unknown>;
+  if (typeof metadata !== "string") return {};
+
+  try {
+    const parsed = JSON.parse(metadata) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function getQuoteContextFromTrade(trade: Trade): StoredQuoteContext {
+  const metadata = parseTradeMetadata(trade.metadata);
+  const raw =
+    typeof metadata.quoteContext === "object" && metadata.quoteContext !== null
+      ? (metadata.quoteContext as Record<string, unknown>)
+      : {};
+
+  const market = String(raw.market ?? "").trim();
+  const exchange = String(raw.exchange ?? "").trim();
+  const scope = String(raw.scope ?? "").trim();
+
+  return {
+    market: market || null,
+    exchange: exchange || null,
+    scope: scope || null,
+  };
+}
+
 
 export function useOperationsInfo() {
   const CURRENCY = "USD";
 
-  const { user, updateUserBalance } = useUserStore();
-  const { dataMarket, getLivePrice } = useMarketStore();
+  const user = useUserStore((s) => s.user);
+  const updateUserBalance = useUserStore((s) => s.updateUserBalance);
+  const { dataMarket, getLivePrice, refreshSymbolQuote } = useMarketStore();
   const confirm = useConfirm();
 
   const [openTrades, setOpenTrades] = useState<Trade[]>([]);
@@ -46,6 +99,25 @@ export function useOperationsInfo() {
 
   const [rowsPerPage, setRowsPerPage] = useState(4);
   const [page, setPage] = useState(0);
+
+  const engineInFlightRef = useRef(false);
+  const engineErrorToastRef = useRef(0);
+  const quoteRefreshInFlightRef = useRef(false);
+
+  async function refreshCurrentUserBalance() {
+    try {
+      const response = await fetch("/api/user/me", { cache: "no-store" });
+      if (!response.ok) return;
+
+      const payload = await response.json().catch(() => null);
+      const balance = Number(payload?.balance);
+      if (Number.isFinite(balance)) {
+        updateUserBalance(balance);
+      }
+    } catch (error) {
+      console.error("refreshCurrentUserBalance:", error);
+    }
+  }
 
   /* ------------------------ Precio en vivo con fallbacks ------------------------ */
   function resolveLivePrice(symbol: string, fallback: number) {
@@ -79,13 +151,10 @@ export function useOperationsInfo() {
   /* ---------------------------------- Fetch ---------------------------------- */
   const fetchTradesAll = async () => {
     if (!user?.id) return;
-    const userId = String(user.id);
 
     try {
       const res = await fetch(
-        `/api/trade/list?userId=${encodeURIComponent(
-          userId
-        )}&status=all&ts=${Date.now()}`,
+        `/api/trade/list?status=all&ts=${Date.now()}`,
         { cache: "no-store" }
       );
       const data = await res.json();
@@ -110,13 +179,10 @@ export function useOperationsInfo() {
   const fetchTradesByStatus = async (status: "open" | "closed" | "all") => {
     if (status === "all") return fetchTradesAll();
     if (!user?.id) return;
-    const userId = String(user.id);
 
     try {
       const res = await fetch(
-        `/api/trade/list?userId=${encodeURIComponent(
-          userId
-        )}&status=${status}&ts=${Date.now()}`,
+        `/api/trade/list?status=${status}&ts=${Date.now()}`,
         { cache: "no-store" }
       );
       const data = await res.json();
@@ -202,8 +268,8 @@ export function useOperationsInfo() {
       balance,
       usedMargin: Number(usedMargin.toFixed(2)),
       freeMargin: Number(freeMargin.toFixed(2)),
-      openPnL: Number(openPnL.toFixed(2)),
-      equity: Number(equity.toFixed(2)),
+      openPnL,
+      equity,
       marginLevel: Number(marginLevel.toFixed(2)),
       credit: 0,
     });
@@ -230,8 +296,8 @@ export function useOperationsInfo() {
 
         next[t.id] = {
           price: Number(price.toFixed(6)),
-          pnl: Number(pnl.toFixed(2)),
-          pct: Number(pct.toFixed(2)),
+          pnl,
+          pct: Number(pct.toFixed(4)),
         };
       }
       setLivePerf(next);
@@ -242,7 +308,43 @@ export function useOperationsInfo() {
     return () => clearInterval(id);
   }, [openTrades, dataMarket, getLivePrice]);
 
+  useEffect(() => {
+    if (!openTrades.length) return;
+
+    const refreshQuotes = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      if (quoteRefreshInFlightRef.current) return;
+
+      quoteRefreshInFlightRef.current = true;
+
+      try {
+        const uniqueTrades = Array.from(
+          new Map(
+            openTrades.map((trade) => [String(trade.symbol).toUpperCase(), trade])
+          ).values()
+        );
+
+        await Promise.allSettled(
+          uniqueTrades.map((trade) =>
+            refreshSymbolQuote(trade.symbol, getQuoteContextFromTrade(trade))
+          )
+        );
+      } finally {
+        quoteRefreshInFlightRef.current = false;
+      }
+    };
+
+    void refreshQuotes();
+    const id = setInterval(() => {
+      void refreshQuotes();
+    }, 4000);
+
+    return () => clearInterval(id);
+  }, [openTrades, refreshSymbolQuote]);
+
   /* ------------------- Auto-activación de pendientes (anti-spam) ------------------- */
+  const ENGINE_POLL_MS = 4_000;
   const ACTIVATION_COOLDOWN_MS = 12_000;
   const MAX_ACTIVATIONS_IN_FLIGHT = 2;
   const PRICE_EPS = 1e-8;
@@ -253,11 +355,46 @@ export function useOperationsInfo() {
   const lastToastRef = useRef<number>(0);
 
   useEffect(() => {
-    if (!pendingTrades.length) return;
+    if (!user?.id) return;
+    if (!pendingTrades.length && !openTrades.length) return;
 
     const tick = async () => {
       if (typeof document !== "undefined" && document.hidden) return;
       if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      if (engineInFlightRef.current) return;
+
+      engineInFlightRef.current = true;
+
+      try {
+        const response = await fetch("/api/trade-engine/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        const payload = (await response.json().catch(() => null)) as TradeEngineRunResponse | null;
+
+        if (!response.ok || !payload?.ok) {
+          throw new Error(payload?.error || `Error ejecutando motor (${response.status})`);
+        }
+
+        const activated = Number(payload.pending?.activated ?? 0);
+        const closed = Number(payload.open?.closed ?? 0);
+
+        if (activated > 0 || closed > 0) {
+          await Promise.all([fetchTradesAll(), refreshCurrentUserBalance()]);
+        }
+        return;
+      } catch (error: any) {
+        if (Date.now() - engineErrorToastRef.current > 15_000) {
+          toast.error(
+            `No se pudo actualizar operaciones automáticas: ${error?.message ?? error}`
+          );
+          engineErrorToastRef.current = Date.now();
+        }
+        console.error("trade-engine poll:", error);
+        return;
+      } finally {
+        engineInFlightRef.current = false;
+      }
 
       const priceCache = new Map<string, number>();
       const now = Date.now();
@@ -272,12 +409,9 @@ export function useOperationsInfo() {
         const trigger = toNum(p.triggerPrice);
         if (trigger <= 0) continue;
 
-        let live = priceCache.get(p.symbol);
-        if (live == null) {
-          const fb = toNum(p.entryPrice) || trigger;
-          live = resolveLivePrice(p.symbol, fb);
-          priceCache.set(p.symbol, live);
-        }
+        const fb = toNum(p.entryPrice) || trigger;
+        const live = Number(priceCache.get(p.symbol) ?? resolveLivePrice(p.symbol, fb));
+        priceCache.set(p.symbol, live);
 
         const rule = (p.triggerRule || "gte") as TriggerRule;
         const meets =
@@ -320,7 +454,7 @@ export function useOperationsInfo() {
             const res = await fetch("/api/trade/pending/activate", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ tradeId: p.id, currentPrice: live }),
+              body: JSON.stringify({ tradeId: p.id }),
             });
             const data = await res.json();
 
@@ -352,25 +486,21 @@ export function useOperationsInfo() {
       );
     };
 
-    const id = setInterval(tick, 1000);
+    void tick();
+    const id = setInterval(tick, ENGINE_POLL_MS);
     return () => clearInterval(id);
-  }, [pendingTrades, dataMarket, getLivePrice]);
+  }, [user?.id, pendingTrades, openTrades]);
 
   /* --------------------------- API helper para cierre --------------------------- */
   async function apiCloseTrade(
     tradeId: string | number,
-    symbol: string,
-    entryPrice: string
+    symbol: string
   ) {
-    const fallback = Number.parseFloat(entryPrice || "0");
-    const marketPrice = resolveLivePrice(symbol, fallback);
-    const closePrice =
-      Number.isFinite(marketPrice) && marketPrice > 0 ? marketPrice : fallback;
-
+    await refreshSymbolQuote(symbol);
     const res = await fetch("/api/trade/close", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tradeId, closePrice }),
+      body: JSON.stringify({ tradeId }),
     });
 
     const data = await res.json();
@@ -409,7 +539,7 @@ export function useOperationsInfo() {
 
     try {
       const data = await toast.promise(
-        apiCloseTrade(trade.id, trade.symbol, trade.entryPrice),
+        apiCloseTrade(trade.id, trade.symbol),
         {
           loading: `Cerrando ${trade.symbol}…`,
           success: (d) =>
