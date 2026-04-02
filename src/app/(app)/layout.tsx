@@ -26,7 +26,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </div>
           {/* Contenido dinámico */}
           <main className="flex-1 w-full p-6 relative">
-            <WhatsAppFloatingButton phoneNumber="346124588073"  />
+            <WhatsAppFloatingButton phoneNumber="34612458073"  />
             {children}
           </main>
         </div>
