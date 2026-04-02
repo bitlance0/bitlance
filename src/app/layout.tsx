@@ -55,7 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <CookieProvider>
           <AuthSync>
             <>
-              <WhatsAppFloatingButton phoneNumber="346124588073" />
+              <WhatsAppFloatingButton phoneNumber="34612458073" />
               {children}
               <CookieBanner />
             </>
