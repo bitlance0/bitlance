@@ -1,8 +1,8 @@
 // src/app/api/admin/usuarios/[usuarioId]/cuentas/route.ts
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { tradingAccounts } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { tradingAccounts, transactions } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
 
 export async function GET(
   _req: Request,
@@ -19,10 +19,41 @@ export async function GET(
     }
 
     // 👇 mismas cuentas que en /api/cuentas pero filtradas por el usuarioId recibido
-    const cuentas = await db
-      .select()
-      .from(tradingAccounts)
-      .where(eq(tradingAccounts.userId, usuarioId));
+    const [cuentas, pendingWithdrawals] = await Promise.all([
+      db
+        .select()
+        .from(tradingAccounts)
+        .where(eq(tradingAccounts.userId, usuarioId)),
+      db
+        .select()
+        .from(transactions)
+        .where(
+          and(
+            eq(transactions.userId, usuarioId),
+            eq(transactions.type, "withdrawal"),
+            eq(transactions.status, "pending")
+          )
+        ),
+    ]);
+
+    const pendingByAccount = new Map<string, number>();
+
+    for (const row of pendingWithdrawals) {
+      const meta = (row.metadata ?? {}) as Record<string, unknown>;
+      const accountId =
+        typeof meta.accountId === "string"
+          ? meta.accountId
+          : typeof meta.account_id === "string"
+          ? meta.account_id
+          : null;
+
+      if (!accountId) continue;
+
+      pendingByAccount.set(
+        accountId,
+        (pendingByAccount.get(accountId) ?? 0) + Number(row.amount ?? 0)
+      );
+    }
 
     const mapped = cuentas.map((c) => {
       // Mapear status BD → status UI
@@ -41,13 +72,16 @@ export async function GET(
           estado = "activa";
       }
 
+      const balance = Number(c.balance ?? 0);
+      const pending = pendingByAccount.get(c.id) ?? 0;
+
       return {
         id: c.id,
         numero: c.accountNumber,
         tipo: "trading" as const, // por ahora todas trading reales
         moneda: c.currency,
-        balance: Number(c.balance ?? 0),
-        balanceDisponible: Number(c.balance ?? 0),
+        balance,
+        balanceDisponible: Math.max(0, balance - pending),
         estado,
         fechaCreacion: c.createdAt
           ? c.createdAt.toISOString().slice(0, 10)

@@ -3,63 +3,54 @@
 
 import {
   DropdownMenu,
-  DropdownMenuItem,
   DropdownMenuContent,
-  DropdownMenuTrigger
+  DropdownMenuItem,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useRouter } from "next/navigation";
-import { authClient } from "@/lib/auth-client";
-import { useUserStore } from "@/stores/useUserStore";
 import { Label } from "@/components/ui/label";
-import ActionButton from "@/components/ui/ActionButton";
-import { PanelLeftIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { authClient } from "@/lib/auth-client";
+import { ChevronsLeft } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useSidebar } from "@/components/ui/sidebar";
+import { useUserStore } from "@/stores/useUserStore";
 
 export function Navbar() {
-  // const user = useUserStore((state) => state.user);
   const { user, clearUser } = useUserStore();
-  // función para redirigir
   const router = useRouter();
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, state } = useSidebar();
 
   const handleLogout = () => {
     authClient.signOut();
     clearUser();
     router.push("/landing");
-  }
-
+  };
 
   return (
-    <header className="sticky top-0 z-40 flex items-center justify-between h-20 px-4 py-3 border-b bg-[var(--color-bg)]">
-      {/* Botón para colapsar sidebar */}
-      <div className="flex items-center gap-2">
-        {/* <SidebarTrigger /> */}
-        <ActionButton
-          href="#"
-          label="Panel de Usuario"
-          icon={<PanelLeftIcon className="size-4" />}
-          expandDirection="right"
-          expandedWidth="w-40"
-          bgColor="bg-[var(--card)]"
-          textColor="text-[var(--amarillo-principal)]"
-          hoverBg="hover:bg-[var(--amarillo-principal)]"
-          hoverText="hover:text-black"
-          onClick={(e) => {
-            e.preventDefault();
-            toggleSidebar();
-          }}
-        />
+    <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg)] px-4 py-3">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          aria-label={state === "collapsed" ? "Expandir panel lateral" : "Contraer panel lateral"}
+          title={state === "collapsed" ? "Expandir panel lateral" : "Contraer panel lateral"}
+          className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--card)] text-[var(--color-text)] transition-all duration-200 hover:border-[var(--amarillo-principal)]/30 hover:bg-[var(--amarillo-principal)]/12 hover:text-[var(--amarillo-principal)] ${
+            state === "expanded" ? "md:invisible md:pointer-events-none md:opacity-0" : "opacity-100"
+          }`}
+        >
+          <ChevronsLeft
+            className={`size-4 transition-transform duration-200 ${state === "collapsed" ? "rotate-180" : ""}`}
+          />
+        </button>
       </div>
 
       <div className="flex items-center gap-4">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Label className="cursor-pointer">
+            <Label className="flex cursor-pointer items-center rounded-lg px-2 py-1.5 text-sm text-[var(--color-text)] transition-colors hover:bg-[var(--card)]">
               {user?.name ?? "Usuario"}
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                className="w-4 h-4 ml-1"
+                className="ml-1 h-4 w-4"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -74,9 +65,11 @@ export function Navbar() {
             </Label>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => { router.push("/cuentas") }}>Mi Cuenta</DropdownMenuItem>
-            <DropdownMenuItem >Centro de Ayuda</DropdownMenuItem>
-            <DropdownMenuItem className="text-red-300" onClick={handleLogout}>Salir</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push("/cuentas")}>Mi Cuenta</DropdownMenuItem>
+            <DropdownMenuItem>Centro de Ayuda</DropdownMenuItem>
+            <DropdownMenuItem className="text-red-300" onClick={handleLogout}>
+              Salir
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

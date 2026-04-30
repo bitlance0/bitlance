@@ -1,27 +1,18 @@
-// src/app/api/admin/movimientos/route.ts
 import { NextResponse } from "next/server";
+import { and, desc, eq, gte, ilike, inArray, lte, or } from "drizzle-orm";
+
 import { db } from "@/db";
 import {
+  rolePermissions,
   transactions,
   user,
-  rolePermissions,
   userPermissions,
 } from "@/db/schema";
-import {
-  desc,
-  eq,
-  ilike,
-  and,
-  or,
-  gte,
-  lte,
-} from "drizzle-orm";
 import { getActor } from "@/modules/auth/services/getActor";
 import { getUserRoleId } from "@/modules/rbac/service";
 
 export async function GET(req: Request) {
   try {
-    // ----------- Auth ----------
     const actor = await getActor(req);
     if (!actor?.user?.id) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
@@ -30,19 +21,18 @@ export async function GET(req: Request) {
     const adminUserId = actor.user.id;
     const roleId = await getUserRoleId(adminUserId);
 
-    // permisos del admin
-    const roleRows = await db
-      .select()
-      .from(rolePermissions)
-      .where(eq(rolePermissions.roleId, roleId));
-
-    const userRows = await db
-      .select()
-      .from(userPermissions)
-      .where(eq(userPermissions.userId, adminUserId));
+    const [roleRows, userRows] = await Promise.all([
+      db
+        .select()
+        .from(rolePermissions)
+        .where(eq(rolePermissions.roleId, roleId)),
+      db
+        .select()
+        .from(userPermissions)
+        .where(eq(userPermissions.userId, adminUserId)),
+    ]);
 
     const permissions: Record<string, boolean> = {};
-
     for (const p of roleRows) {
       if (p.type === "mandatory") permissions[p.permissionId] = true;
       else if (p.type === "blocked") permissions[p.permissionId] = false;
@@ -63,33 +53,25 @@ export async function GET(req: Request) {
       );
     }
 
-    // ----------- Query Params ----------
     const { searchParams } = new URL(req.url);
-
     const limit = Number(searchParams.get("limit") ?? 10);
     const offset = Number(searchParams.get("offset") ?? 0);
-
     const q = searchParams.get("q")?.trim() || null;
     const from = searchParams.get("from") || null;
     const to = searchParams.get("to") || null;
     const tipo = searchParams.get("tipo") || null;
     const estado = searchParams.get("estado") || null;
-
-    // ✔ NUEVOS FILTROS
     const accountId = searchParams.get("accountId") || null;
     const currencyFilter = searchParams.get("currency") || null;
 
-    // ----------- WHERE dinámico ----------
     const whereClauses: any[] = [];
 
-    // filtro por nombre o email (q)
     if (q) {
       whereClauses.push(
         or(ilike(user.name, `%${q}%`), ilike(user.email, `%${q}%`))
       );
     }
 
-    // filtro por tipo
     if (tipo === "depositos") {
       whereClauses.push(eq(transactions.type, "deposit"));
     } else if (tipo === "retiros") {
@@ -100,12 +82,12 @@ export async function GET(req: Request) {
       );
     }
 
-    // filtro por estado
     if (estado && estado !== "todos") {
-      whereClauses.push(eq(transactions.status, estado as "pending" | "completed" | "failed"));
+      whereClauses.push(
+        eq(transactions.status, estado as "pending" | "completed" | "failed")
+      );
     }
 
-    // rango de fechas
     if (from) {
       whereClauses.push(gte(transactions.createdAt, new Date(from)));
     }
@@ -116,14 +98,12 @@ export async function GET(req: Request) {
       whereClauses.push(lte(transactions.createdAt, endDate));
     }
 
-    // ✔ NUEVO: filtrar por ID de cuenta
     if (accountId) {
       whereClauses.push(
         ilike(transactions.metadata, `%\"accountId\":\"${accountId}\"%`)
       );
     }
 
-    // ✔ NUEVO: filtrar por moneda
     if (currencyFilter) {
       whereClauses.push(eq(transactions.currency, currencyFilter));
     }
@@ -131,7 +111,6 @@ export async function GET(req: Request) {
     const whereFinal =
       whereClauses.length > 0 ? and(...whereClauses) : undefined;
 
-    // ----------- Query Movimientos ----------
     const rows = await db
       .select({
         id: transactions.id,
@@ -152,22 +131,66 @@ export async function GET(req: Request) {
       .limit(limit)
       .offset(offset);
 
-    const items = rows.map((r) => ({
-      id: r.id,
-      tipo:
-        r.type === "deposit"
-          ? "Depósito"
-          : r.type === "withdrawal"
-          ? "Retiro"
-          : r.type,
-      monto: Number(r.amount ?? 0),
-      fecha: r.createdAt?.toISOString() ?? new Date().toISOString(),
-      currency: r.currency ?? "USD",
-      status: r.status ?? "desconocido",
-      userName: r.userName,
-      userEmail: r.userEmail,
-      metadata: r.metadata ?? {},
-    }));
+    const reviewedByIds = Array.from(
+      new Set(
+        rows
+          .map((row) => {
+            const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+            return typeof metadata.reviewedBy === "string"
+              ? metadata.reviewedBy
+              : null;
+          })
+          .filter((value): value is string => Boolean(value))
+      )
+    );
+
+    const reviewedByUsers =
+      reviewedByIds.length > 0
+        ? await db
+            .select({
+              id: user.id,
+              name: user.name,
+              email: user.email,
+            })
+            .from(user)
+            .where(inArray(user.id, reviewedByIds))
+        : [];
+
+    const reviewedByMap = new Map(
+      reviewedByUsers.map((reviewer) => [
+        reviewer.id,
+        reviewer.name || reviewer.email || "Admin",
+      ])
+    );
+
+    const items = rows.map((r) => {
+      const metadata = (r.metadata ?? {}) as Record<string, unknown>;
+      const reviewedById =
+        typeof metadata.reviewedBy === "string" ? metadata.reviewedBy : null;
+
+      return {
+        id: r.id,
+        userId: r.userId,
+        tipo:
+          r.type === "deposit"
+            ? "Deposito"
+            : r.type === "withdrawal"
+            ? "Retiro"
+            : r.type,
+        monto: Number(r.amount ?? 0),
+        fecha: r.createdAt?.toISOString() ?? new Date().toISOString(),
+        currency: r.currency ?? "USD",
+        status: r.status ?? "desconocido",
+        userName: r.userName,
+        userEmail: r.userEmail,
+        metadata: {
+          ...metadata,
+          reviewedByName: reviewedById
+            ? reviewedByMap.get(reviewedById) ?? null
+            : null,
+        },
+      };
+    });
 
     return NextResponse.json({
       items,

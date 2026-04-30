@@ -25,6 +25,10 @@ export type AccountCardProps = {
   onStatus?: (id: string) => void;
   onOperate?: (id: string) => void;
   onSelectActive?: (id: string) => void;
+  viewLabel?: string;
+  statusLabel?: string;
+  operateLabel?: string;
+  selectActiveLabel?: string;
 };
 
 function tipoClasses(tipo: AccountType) {
@@ -80,6 +84,10 @@ export default function AccountCard({
   onStatus,
   onOperate,
   onSelectActive,
+  viewLabel = "Ver",
+  statusLabel = "Estado",
+  operateLabel = "Operar",
+  selectActiveLabel = "Seleccionar activa",
 }: AccountCardProps) {
   // Genera sparkline si no llega: pequeña variación pseudoaleatoria estable por id
   const fallback = (() => {
@@ -202,7 +210,7 @@ export default function AccountCard({
               className="flex-1 md:flex-none"
               onClick={() => onView?.(id)}
             >
-              <Eye className="w-4 h-4 mr-1" /> Ver
+              <Eye className="w-4 h-4 mr-1" /> {viewLabel}
             </Button>
 
             <Button
@@ -211,7 +219,7 @@ export default function AccountCard({
               className="flex-1 md:flex-none"
               onClick={() => onStatus?.(id)}
             >
-              <Download className="w-4 h-4 mr-1" /> Estado
+              <Download className="w-4 h-4 mr-1" /> {statusLabel}
             </Button>
 
             <Button
@@ -219,7 +227,7 @@ export default function AccountCard({
               size="sm"
               onClick={() => onOperate?.(id)}
             >
-              Operar
+              {operateLabel}
             </Button>
 
             <Button
@@ -228,7 +236,7 @@ export default function AccountCard({
               className="flex-1 md:flex-none"
               onClick={() => onSelectActive?.(id)}
             >
-              Seleccionar activa
+              {selectActiveLabel}
             </Button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { trades } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { isSymbolMarketOpen } from "@/lib/marketSessions";
 import {
   fetchItickLatestQuote,
@@ -12,24 +12,6 @@ const APP_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 const ACTIVATE_URL = `${APP_BASE_URL}/api/trade/pending/activate`;
 const CLOSE_URL = `${APP_BASE_URL}/api/trade/close`;
 const TRADE_ENGINE_INTERNAL_KEY = process.env.TRADE_ENGINE_INTERNAL_KEY?.trim();
-
-type TradeEngineBatchResult = {
-  scanned: number;
-  activated: number;
-  closed: number;
-};
-
-export type TradeEngineRunResult = {
-  ok: true;
-  pending: {
-    scanned: number;
-    activated: number;
-  };
-  open: {
-    scanned: number;
-    closed: number;
-  };
-};
 
 function parseMetadata(metadata: unknown): Record<string, unknown> {
   if (!metadata) return {};
@@ -64,11 +46,6 @@ function toNumber(value: unknown) {
   return Number.isFinite(n) ? n : null;
 }
 
-function toPositiveNumber(value: unknown) {
-  const n = toNumber(value);
-  return n !== null && n > 0 ? n : null;
-}
-
 function buildInternalHeaders() {
   const headers: HeadersInit = {
     "Content-Type": "application/json",
@@ -87,17 +64,11 @@ async function resolvePriceForTrade(trade: typeof trades.$inferSelect) {
   return quote.price;
 }
 
-async function processPendingTrades(now: Date, userId?: string): Promise<TradeEngineBatchResult> {
+async function processPendingTrades(now: Date) {
   const pending = await db
     .select()
     .from(trades)
-    .where(
-      userId
-        ? and(eq(trades.status, "pending" as "pending"), eq(trades.userId, userId))
-        : eq(trades.status, "pending" as "pending")
-    );
-
-  let activated = 0;
+    .where(eq(trades.status, "pending" as "pending"));
 
   for (const trade of pending) {
     try {
@@ -110,7 +81,7 @@ async function processPendingTrades(now: Date, userId?: string): Promise<TradeEn
       const marketStatus = isSymbolMarketOpen(symbol, now);
       if (!marketStatus.open) continue;
 
-      const trigger = toPositiveNumber(trade.triggerPrice);
+      const trigger = toNumber(trade.triggerPrice);
       const rule = String(trade.triggerRule ?? "").toLowerCase();
       if (!trigger || !(rule === "gte" || rule === "lte")) continue;
 
@@ -129,36 +100,22 @@ async function processPendingTrades(now: Date, userId?: string): Promise<TradeEn
         console.warn(
           `[trade-engine] No se pudo activar trade ${trade.id}: ${response.status} ${detail}`
         );
-        continue;
       }
-      activated += 1;
     } catch (error) {
       if (error instanceof ItickQuoteError && error.code === "rate_limited") {
         console.warn("[trade-engine] iTICK rate limited while activating pending");
-        break;
+        return;
       }
       console.error("[trade-engine] Error procesando pendiente:", trade.id, error);
     }
   }
-
-  return {
-    scanned: pending.length,
-    activated,
-    closed: 0,
-  };
 }
 
-async function processOpenTrades(now: Date, userId?: string): Promise<TradeEngineBatchResult> {
+async function processOpenTrades(now: Date) {
   const open = await db
     .select()
     .from(trades)
-    .where(
-      userId
-        ? and(eq(trades.status, "open" as "open"), eq(trades.userId, userId))
-        : eq(trades.status, "open" as "open")
-    );
-
-  let closed = 0;
+    .where(eq(trades.status, "open" as "open"));
 
   for (const trade of open) {
     try {
@@ -166,15 +123,10 @@ async function processOpenTrades(now: Date, userId?: string): Promise<TradeEngin
       const marketStatus = isSymbolMarketOpen(symbol, now);
       if (!marketStatus.open) continue;
 
-      const side = trade.side === "sell" ? "sell" : "buy";
-      const tp = toPositiveNumber(trade.takeProfit);
-      const sl = toPositiveNumber(trade.stopLoss);
-
-      if (tp === null && sl === null) {
-        continue;
-      }
-
       const price = await resolvePriceForTrade(trade);
+      const side = trade.side === "sell" ? "sell" : "buy";
+      const tp = toNumber(trade.takeProfit);
+      const sl = toNumber(trade.stopLoss);
 
       let shouldClose = false;
       if (sl !== null) {
@@ -201,41 +153,22 @@ async function processOpenTrades(now: Date, userId?: string): Promise<TradeEngin
         console.warn(
           `[trade-engine] No se pudo cerrar trade ${trade.id}: ${response.status} ${detail}`
         );
-        continue;
       }
-      closed += 1;
     } catch (error) {
       if (error instanceof ItickQuoteError && error.code === "rate_limited") {
         console.warn("[trade-engine] iTICK rate limited while closing trades");
-        break;
+        return;
       }
       console.error("[trade-engine] Error procesando abierto:", trade.id, error);
     }
   }
-
-  return {
-    scanned: open.length,
-    activated: 0,
-    closed,
-  };
 }
 
-export async function runTradeEngineOnce(options?: { userId?: string }): Promise<TradeEngineRunResult> {
+export async function runTradeEngineOnce() {
   const now = new Date();
-  const userId = options?.userId;
 
-  const pending = await processPendingTrades(now, userId);
-  const open = await processOpenTrades(now, userId);
+  await processPendingTrades(now);
+  await processOpenTrades(now);
 
-  return {
-    ok: true,
-    pending: {
-      scanned: pending.scanned,
-      activated: pending.activated,
-    },
-    open: {
-      scanned: open.scanned,
-      closed: open.closed,
-    },
-  };
+  return { ok: true };
 }
