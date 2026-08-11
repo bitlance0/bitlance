@@ -168,6 +168,25 @@ export function useOperationsInfo() {
   }, [user?.id]);
 
 
+  // 🔄 Cargar cotización en vivo para todas las operaciones abiertas
+  useEffect(() => {
+    if (!openTrades.length) return;
+
+    const refreshOpenQuotes = async () => {
+      const uniqueSymbols = Array.from(new Set(openTrades.map((t) => t.symbol)));
+      for (const sym of uniqueSymbols) {
+        const live = getLivePrice(sym);
+        if (live == null) {
+          await refreshSymbolQuote(sym);
+        }
+      }
+    };
+
+    refreshOpenQuotes();
+    const id = setInterval(refreshOpenQuotes, 3000);
+    return () => clearInterval(id);
+  }, [openTrades, getLivePrice, refreshSymbolQuote]);
+
   /* -------------------------------- Métricas -------------------------------- */
   useEffect(() => {
     if (!user) return;
@@ -184,12 +203,12 @@ export function useOperationsInfo() {
       usedMargin += margin;
 
       const currentPrice = resolveLivePrice(trade.symbol, entry);
-      const pnl = (currentPrice - entry) * qty * leverage * (trade.side === "buy" ? 1 : -1);
+      const pnl = (currentPrice - entry) * qty * (trade.side === "buy" ? 1 : -1);
       openPnL += pnl;
     }
 
-    const freeMargin = balance - usedMargin;
-    const equity = balance + openPnL;
+    const freeMargin = balance + Math.min(0, openPnL);
+    const equity = balance + usedMargin + openPnL;
     const marginLevel = usedMargin > 0 ? (equity / usedMargin) * 100 : 0;
 
     setMetrics({
@@ -219,8 +238,9 @@ export function useOperationsInfo() {
         const dir = sideSign(t.side);
 
         const price = resolveLivePrice(t.symbol, entry);
-        const pnl = (price - entry) * qty * lev * dir;
-        const pct = ((price - entry) / (entry || 1)) * 100 * dir;
+        const pnl = (price - entry) * qty * dir;
+        const margin = (entry * qty) / lev;
+        const pct = margin > 0 ? (pnl / margin) * 100 : 0;
 
         next[t.id] = {
           price: Number(price.toFixed(6)),
