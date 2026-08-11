@@ -126,7 +126,7 @@ export async function POST(req: Request) {
     const close = quote.price;
     const sideFactor = trade.side === "buy" ? 1 : -1;
 
-    const profit = Number(((close - entry) * quantity * leverage * sideFactor).toFixed(2));
+    const profit = Number(((close - entry) * quantity * sideFactor).toFixed(2));
     const marginFromMetadata = Number(metadata.marginUsed ?? 0);
     const marginUsed = Number.isFinite(marginFromMetadata) && marginFromMetadata > 0
       ? marginFromMetadata
