@@ -1,18 +1,15 @@
 // src/middleware.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { SessionService } from "@/modules/auth/services/SessionService";
-import { UserService } from "@/modules/auth/services/UserService";
 
-const protectedRoutes = ["/dashboard", "/profile", "/account"];
-const adminRoutes = ["/admin"];
-const publicOnlyRoutes = ["/sign-in", "/landing"]; // 👈 rutas que solo deben ver NO logueados
+const protectedRoutes = ["/dashboard", "/profile", "/account", "/admin"];
+const publicOnlyRoutes = ["/sign-in", "/landing"];
 
 export async function middleware(req: NextRequest) {
   const url = req.nextUrl.clone();
-
-  // 🛑 Nunca interceptes /api (ni assets)
   const p = url.pathname;
+
+  // 🛑 Nunca interceptar /api ni assets estáticos
   if (
     p.startsWith("/api") ||
     p.startsWith("/_next") ||
@@ -25,8 +22,15 @@ export async function middleware(req: NextRequest) {
 
   const token = req.cookies.get("better-auth.session-token")?.value;
 
+  // 🔹 Si el token residual es el antiguo mock "dev-barosanz-token", limpiarlo y enviar a login
+  if (token === "dev-barosanz-token") {
+    const res = NextResponse.redirect(new URL("/sign-in", req.url));
+    res.cookies.delete("better-auth.session-token");
+    return res;
+  }
+
+  // 🔹 Usuario no autenticado intentando entrar a ruta protegida
   if (!token) {
-    // 🔹 Usuario no autenticado → bloquear rutas protegidas
     if (protectedRoutes.some((r) => url.pathname.startsWith(r))) {
       url.pathname = "/sign-in";
       return NextResponse.redirect(url);
@@ -34,30 +38,9 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // 🔹 Usuario autenticado → validar sesión
-  const session = await SessionService.getSessionByToken(token);
-  if (!session || !(await SessionService.isValidSession(token))) {
-    const res = NextResponse.redirect(new URL("/sign-in", req.url));
-    res.cookies.delete("better-auth.session-token");
-    return res;
-  }
-
-  const user = await UserService.getUserById(session.userId);
-  if (!user || user.status !== "active") {
-    return NextResponse.redirect(new URL("/blocked", req.url));
-  }
-
-  // 🔹 Evitar que un usuario logueado vea login/landing
+  // 🔹 Usuario con token intentando entrar a /sign-in o /landing
   if (publicOnlyRoutes.includes(url.pathname)) {
     return NextResponse.redirect(new URL("/", req.url));
-  }
-
-  // 🔹 Verificar rol admin
-  if (
-    adminRoutes.some((r) => url.pathname.startsWith(r)) &&
-    user.role !== "admin"
-  ) {
-    return NextResponse.redirect(new URL("/forbidden", req.url));
   }
 
   return NextResponse.next();
