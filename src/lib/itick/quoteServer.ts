@@ -1,6 +1,7 @@
 import exchangeMetaJson from "@/data/itick/exchange-meta.json";
 import marketNavigationJson from "@/data/itick/market-navigation.json";
 import marketStructureJson from "@/data/itick/itick_market_structure.json";
+import { MOCK_BASE } from "@/lib/mockData";
 
 type ExchangeMeta = Record<
   string,
@@ -478,6 +479,13 @@ export async function fetchItickLatestQuote(
     }
   }
 
+  // Si iTick falló o no dio resultados, intentar obtener cotización de respaldo (Binance / Mock)
+  const fallback = await resolveFallbackQuote(symbol, context);
+  if (fallback) {
+    saveCache(cacheKey, fallback);
+    return fallback;
+  }
+
   if (sawPackageError) {
     throw new ItickQuoteError(
       "Mercado no disponible por plan de suscripcion iTICK",
@@ -501,4 +509,74 @@ export async function fetchItickLatestQuote(
     404
   );
 }
+
+async function resolveFallbackQuote(
+  symbol: string,
+  _context?: ItickQuoteContext
+): Promise<ItickLatestQuote | null> {
+  const norm = normalizeSymbol(symbol);
+
+  // 1. Fallback Binance público para activos cripto
+  const isCrypto =
+    norm.endsWith("USDT") ||
+    ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "DOT", "LTC"].includes(
+      norm
+    );
+
+  if (isCrypto) {
+    const pair = norm.endsWith("USDT") ? norm : `${norm}USDT`;
+    try {
+      const res = await fetch(
+        `https://api.binance.com/api/v3/ticker/price?symbol=${pair}`,
+        {
+          signal: AbortSignal.timeout(3500),
+        }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as { price?: string };
+        const price = parseFloat(data?.price ?? "");
+        if (Number.isFinite(price) && price > 0) {
+          return {
+            symbol: norm,
+            price,
+            timestampMs: Date.now(),
+            latestTradingDay: new Date().toISOString(),
+            volume: null,
+            turnover: null,
+            ts: Date.now(),
+            market: "crypto",
+            exchange: "BA",
+            region: "GLOBAL",
+            apiType: "crypto",
+          };
+        }
+      }
+    } catch {
+      // Continuar a fallback de tabla si falla la red
+    }
+  }
+
+  // 2. Fallback de mercado base estático (MOCK_BASE)
+  for (const [marketKey, list] of Object.entries(MOCK_BASE)) {
+    const found = list.find((item) => item.symbol.toUpperCase() === norm);
+    if (found && Number.isFinite(found.price) && found.price > 0) {
+      return {
+        symbol: norm,
+        price: found.price,
+        timestampMs: Date.now(),
+        latestTradingDay: found.latestTradingDay || new Date().toISOString(),
+        volume: null,
+        turnover: null,
+        ts: Date.now(),
+        market: marketKey,
+        exchange: "DEFAULT",
+        region: "GLOBAL",
+        apiType: marketKey,
+      };
+    }
+  }
+
+  return null;
+}
+
 

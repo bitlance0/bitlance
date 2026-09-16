@@ -238,10 +238,22 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
       const sl = t.stopLoss ? Number(t.stopLoss) : null;
 
       let shouldClose = false;
-      let reason: "tp" | "sl" | null = null;
+      let reason: "tp" | "sl" | "liquidation" | null = null;
 
-      // 1) Primero Stop Loss (prioridad a proteger)
-      if (sl && Number.isFinite(sl)) {
+      // 0) Liquidación por agotamiento de margen (Margin Call / Stop-Out a 95%)
+      const entryPrice = Number(t.entryPrice);
+      const quantity = Number(t.quantity);
+      const leverage = Math.max(Number(t.leverage || 1), 1);
+      const marginUsed = (entryPrice * quantity) / leverage;
+      const currentPnl = (price - entryPrice) * quantity * (side === "buy" ? 1 : -1);
+
+      if (marginUsed > 0 && currentPnl <= -marginUsed * 0.95) {
+        shouldClose = true;
+        reason = "liquidation";
+      }
+
+      // 1) Stop Loss (prioridad a proteger si no fue liquidado)
+      if (!shouldClose && sl && Number.isFinite(sl)) {
         if (
           (side === "buy" && price <= sl) ||
           (side === "sell" && price >= sl)
@@ -251,7 +263,7 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
         }
       }
 
-      // 2) Luego Take Profit (solo si no se activó SL)
+      // 2) Take Profit (solo si no se activó SL ni liquidación)
       if (!shouldClose && tp && Number.isFinite(tp)) {
         if (
           (side === "buy" && price >= tp) ||
@@ -266,7 +278,11 @@ async function processOpenTrades(priceMap: Map<string, number>, now: Date) {
 
       console.log(
         `✅ Cerrando trade ${t.id} (${symbol}) por ${
-          reason === "sl" ? "STOP LOSS" : "TAKE PROFIT"
+          reason === "liquidation"
+            ? "LIQUIDACIÓN (MARGIN CALL)"
+            : reason === "sl"
+            ? "STOP LOSS"
+            : "TAKE PROFIT"
         } @${price}`
       );
 

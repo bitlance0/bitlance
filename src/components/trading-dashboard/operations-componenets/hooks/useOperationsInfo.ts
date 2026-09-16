@@ -167,7 +167,6 @@ export function useOperationsInfo() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-
   // 🔄 Cargar cotización en vivo para todas las operaciones abiertas
   useEffect(() => {
     if (!openTrades.length) return;
@@ -240,7 +239,8 @@ export function useOperationsInfo() {
         const price = resolveLivePrice(t.symbol, entry);
         const pnl = (price - entry) * qty * dir;
         const margin = (entry * qty) / lev;
-        const pct = margin > 0 ? (pnl / margin) * 100 : 0;
+        // Retorno sobre capital/margen invertido (ROE %)
+        const pct = margin > 0 ? (pnl / margin) * 100 : ((price - entry) / (entry || 1)) * 100 * dir * lev;
 
         next[t.id] = {
           price: Number(price.toFixed(6)),

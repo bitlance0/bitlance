@@ -28,6 +28,7 @@ import { UnitsTable } from "./trading-dialog-components/UnitsTable";
 import { OrderPanelMarket } from "./trading-dialog-components/OrderPanelMarket";
 import { DialogHeaderTrade } from "./trading-dialog-components/DialogHeaderTrade";
 import { OrderPanelPending } from "./trading-dialog-components/OrderPanelPending";
+import { LeverageSelector } from "./trading-dialog-components/LeverageSelector";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/common/ConfirmDialog";
 
@@ -61,6 +62,14 @@ function marketOfSymbol(
   if (/^[A-Z]{6}$/.test(S)) return "fx";
   return "acciones";
 }
+
+const AVAILABLE_LEVERAGES_BY_MARKET: Record<string, number[]> = {
+  crypto: [1, 2, 5, 10, 20, 50, 100],
+  fx: [1, 5, 10, 20, 50, 100],
+  indices: [1, 5, 10, 20, 50],
+  acciones: [1, 2, 5, 10, 20],
+  commodities: [1, 2, 5, 10, 20],
+};
 
 const MARGIN_CONFIG = {
   crypto: 0.05,
@@ -164,8 +173,22 @@ export function TradingDialog({
   });
 
   const market = useMemo(() => marketOfSymbol(symbol), [symbol]);
-  const marginRate =
-    MARGIN_CONFIG[market as keyof typeof MARGIN_CONFIG] ?? 0.05;
+  const allowedLeverages = useMemo(() => {
+    return AVAILABLE_LEVERAGES_BY_MARKET[market] || [1, 2, 5, 10, 20];
+  }, [market]);
+
+  const [leverage, setLeverage] = useState<number>(() => {
+    const allowed = AVAILABLE_LEVERAGES_BY_MARKET[market] || [1, 2, 5, 10, 20];
+    return allowed.includes(20) ? 20 : allowed[allowed.length - 1];
+  });
+
+  useEffect(() => {
+    if (!allowedLeverages.includes(leverage)) {
+      setLeverage(allowedLeverages.includes(20) ? 20 : allowedLeverages[allowedLeverages.length - 1]);
+    }
+  }, [allowedLeverages, leverage]);
+
+  const marginRate = useMemo(() => 1 / Math.max(leverage, 1), [leverage]);
   const spread = SPREAD_BY_MARKET[market] ?? 0.002;
 
   // ===== mercado abierto/cerrado (prop > horario) =====
@@ -230,12 +253,11 @@ export function TradingDialog({
 
   const maxUnits = useMemo(() => {
     const balance = Number(user?.balance ?? 0);
-    if (balance <= 0 || currentPrice <= 0 || marginRate <= 0) return 0;
-    const maxFromMargin = Math.floor(balance / (currentPrice * marginRate));
-    const maxFromTotalValue = Math.floor(balance / currentPrice);
-    const max = Math.min(maxFromMargin, maxFromTotalValue);
+    if (balance <= 0 || currentPrice <= 0 || leverage <= 0) return 0;
+    // Capacidad real con apalancamiento profesional
+    const max = Math.floor((balance * leverage) / currentPrice);
     return Number.isFinite(max) && max > 0 ? max : 0;
-  }, [user?.balance, currentPrice, marginRate]);
+  }, [user?.balance, currentPrice, leverage]);
 
   useEffect(() => {
     if (maxUnits <= 0) setSelectedUnitOption(0);
@@ -267,13 +289,13 @@ export function TradingDialog({
   const calculations = useMemo(() => {
     const cantidad = Number(selectedUnitOption ?? 0);
     const valor = cantidad * currentPrice;
-    const margenEstimado = valor * marginRate;
+    const margenEstimado = valor / leverage;
     return {
       cantidad: Number.isFinite(cantidad) ? cantidad : 0,
       valor: Number.isFinite(valor) ? valor : 0,
       margenEstimado: Number.isFinite(margenEstimado) ? margenEstimado : 0,
     };
-  }, [selectedUnitOption, currentPrice, marginRate]);
+  }, [selectedUnitOption, currentPrice, leverage]);
 
   const hasSufficientBalance = useMemo(() => {
     const balance = Number(user?.balance ?? 0);
@@ -335,7 +357,7 @@ export function TradingDialog({
     () => (operationType === "buy" ? 1 : -1),
     [operationType]
   );
-  const leverageNum = 1;
+  const leverageNum = leverage;
   const positionQty = calculations.cantidad;
 
   const slMetrics = useMemo(() => {
@@ -346,8 +368,9 @@ export function TradingDialog({
     if (!Number.isFinite(positionQty) || positionQty <= 0) return null;
 
     const diff = stopLossNum - entryReferencePrice;
-    const pct = (diff / entryReferencePrice) * 100;
-    const pnl = diff * positionQty * sideSign * leverageNum;
+    const pnl = diff * positionQty * sideSign;
+    const marginUsed = (entryReferencePrice * positionQty) / leverageNum;
+    const pct = marginUsed > 0 ? (pnl / marginUsed) * 100 : (diff / entryReferencePrice) * 100 * sideSign * leverageNum;
 
     return { diff, pct, pnl };
   }, [
@@ -367,8 +390,9 @@ export function TradingDialog({
     if (!Number.isFinite(positionQty) || positionQty <= 0) return null;
 
     const diff = takeProfitNum - entryReferencePrice;
-    const pct = (diff / entryReferencePrice) * 100;
-    const pnl = diff * positionQty * sideSign * leverageNum;
+    const pnl = diff * positionQty * sideSign;
+    const marginUsed = (entryReferencePrice * positionQty) / leverageNum;
+    const pct = marginUsed > 0 ? (pnl / marginUsed) * 100 : (diff / entryReferencePrice) * 100 * sideSign * leverageNum;
 
     return { diff, pct, pnl };
   }, [
@@ -468,7 +492,7 @@ export function TradingDialog({
           symbol,
           side: operationType,
           quantity: calculations.cantidad,
-          leverage: 1,
+          leverage: leverage,
           takeProfit: hasTP ? takeProfitNum : null,
           stopLoss: hasSL ? stopLossNum : null,
           market: marketProp ?? market,
@@ -510,7 +534,7 @@ export function TradingDialog({
           symbol,
           side: operationType,
           quantity: calculations.cantidad,
-          leverage: 1,
+          leverage: leverage,
           triggerPrice: triggerPriceNum,
           triggerRule,
           takeProfit: hasTP ? takeProfitNum : null,
@@ -635,6 +659,14 @@ export function TradingDialog({
             side={operationType}
             onChange={setOperationType}
             disableSell
+          />
+        </div>
+
+        <div className="mt-2">
+          <LeverageSelector
+            leverage={leverage}
+            allowedLeverages={allowedLeverages}
+            onChange={setLeverage}
           />
         </div>
 
