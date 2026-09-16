@@ -1,4 +1,4 @@
-// src/modules/auth/getActor.ts
+// src/modules/auth/services/getActor.ts
 import { cookies, headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth"; // tu export real (BetterAuth/NextAuth/Lucia/custom)
@@ -6,7 +6,7 @@ import { auth } from "@/lib/auth"; // tu export real (BetterAuth/NextAuth/Lucia/
 export type Actor = { user: { id: string; role?: string } } | null;
 
 export async function getActor(req?: Request): Promise<Actor> {
-  // 0) Bypass opcional en desarrollo (útil para pruebas)
+  // 0) Bypass opcional en desarrollo si está configurado explícitamente por variable de entorno
   if (process.env.RBAC_DEV_ACTOR_ID) {
     return { user: { id: process.env.RBAC_DEV_ACTOR_ID, role: "super" } };
   }
@@ -15,10 +15,6 @@ export async function getActor(req?: Request): Promise<Actor> {
     req?.headers.get("cookie") ??
     (await cookies()).toString() ?? // next/headers
     (await headers()).get("cookie") ?? "";
-
-  if (cookieHeader.includes("dev-barosanz-token") || process.env.NODE_ENV !== "production") {
-    return { user: { id: "CRTm53DehWzFmGowUtCfm08WoN1VeVGT", role: "super" } };
-  }
 
   try {
     // 1) Better Auth estilo: auth.api.getSession({ headers })

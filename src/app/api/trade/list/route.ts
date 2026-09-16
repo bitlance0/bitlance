@@ -4,18 +4,13 @@ import { db } from "@/db";
 import { trades, user } from "@/db/schema";
 import { getActor } from "@/modules/auth/services/getActor";
 
-import { devTradeStore } from "@/lib/dev-auth";
-
 async function isPrivilegedUser(userId: string) {
-  try {
-    const [row] = await db
-      .select({ role: user.role })
-      .from(user)
-      .where(eq(user.id, userId));
-    return row?.role === "admin";
-  } catch {
-    return true;
-  }
+  const [row] = await db
+    .select({ role: user.role })
+    .from(user)
+    .where(eq(user.id, userId));
+
+  return row?.role === "admin";
 }
 
 export async function GET(req: Request) {
@@ -45,33 +40,25 @@ export async function GET(req: Request) {
       targetUserId = requestedUserId;
     }
 
-    try {
-      let rows;
-      if (status === "open" || status === "closed" || status === "pending") {
-        rows = await db
-          .select()
-          .from(trades)
-          .where(and(eq(trades.userId, targetUserId), eq(trades.status, status)))
-          .orderBy(desc(trades.createdAt));
-      } else {
-        rows = await db
-          .select()
-          .from(trades)
-          .where(eq(trades.userId, targetUserId))
-          .orderBy(desc(trades.createdAt));
-      }
-
-      return NextResponse.json({
-        success: true,
-        trades: rows ?? [],
-      });
-    } catch {
-      const devRows = devTradeStore.getTrades(targetUserId, status);
-      return NextResponse.json({
-        success: true,
-        trades: devRows,
-      });
+    let rows;
+    if (status === "open" || status === "closed" || status === "pending") {
+      rows = await db
+        .select()
+        .from(trades)
+        .where(and(eq(trades.userId, targetUserId), eq(trades.status, status)))
+        .orderBy(desc(trades.createdAt));
+    } else {
+      rows = await db
+        .select()
+        .from(trades)
+        .where(eq(trades.userId, targetUserId))
+        .orderBy(desc(trades.createdAt));
     }
+
+    return NextResponse.json({
+      success: true,
+      trades: rows ?? [],
+    });
   } catch (error) {
     console.error("Error listando trades:", error);
     return NextResponse.json(
